@@ -17,10 +17,10 @@ if "%CC%" equ "clang" (
 	set "FLAGS=%FLAGS% -municode"
 	set "DFLAGS=-g"
 )
-if "%~1" equ "rel" (
-	set "MFLAGS=-DNDEBUG"
-) else (
+if "%~1" equ "debug" (
 	set "MFLAGS=%DFLAGS%"
+) else (
+	set "MFLAGS=-DNDEBUG"
 )
 
 @echo on
