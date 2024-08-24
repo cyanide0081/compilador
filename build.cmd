@@ -1,24 +1,20 @@
 @rem build script (gcc/clang + win32-msvc)
 @echo off
 
-where /Q gcc && (set "CC=gcc")
-where /Q clang && (set "CC=clang")
+set "CLANG=x86_64-w64-mingw32-clang"
+where /Q %CLANG% && (set "CC=%CLANG%")
 
 if "%CC%" equ "" (
-	echo ERROR: unable to fing gcc or clang installed
+	echo ERROR: unable to find mingw-w64-clang compiler installed
+	echo ^(refer to https://github.com/mstorsjo/llvm-mingw/releases/^)
 	exit /b
 )
 
 set "FLAGS=-std=c99 -Wall -Wextra -pedantic"
 set "LFLAGS=-luser32 -lcomctl32 -lgdi32 -lcomdlg32 -luxtheme"
-if "%CC%" equ "clang" (
-	set "DFLAGS=-g -gcodeview"
-) else (
-	set "FLAGS=%FLAGS% -municode"
-	set "DFLAGS=-g"
-)
+set "FLAGS=%FLAGS% -municode"
 if "%~1" equ "debug" (
-	set "MFLAGS=%DFLAGS%"
+	set "MFLAGS=-g -gcodeview"
 ) else (
 	set "MFLAGS=-DNDEBUG"
 )
@@ -34,5 +30,5 @@ if "%~1" equ "run" (
 	set "run=true"
 )
 if defined run (
-	start compiler_win32.exe
+	call compiler_win32.exe
 )
