@@ -2,7 +2,7 @@
 @echo off
 
 set "CLANG=x86_64-w64-mingw32-clang"
-where /Q %CLANG% && (set "CC=%CLANG%")
+where /q %CLANG% && (set "CC=%CLANG%")
 
 if "%CC%" == "" (
 	echo ERROR: unable to find mingw-w64-clang compiler installed
@@ -11,8 +11,8 @@ if "%CC%" == "" (
 )
 
 set "FLAGS=-std=c99 -Wall -Wextra -pedantic"
-set "LFLAGS=-luser32 -lcomctl32 -lgdi32 -lcomdlg32 -luxtheme -Wl,--subsystem,windows"
-set "FLAGS=%FLAGS% -municode"
+set "LFLAGS=-luser32 -lcomctl32 -lgdi32 -lcomdlg32 -luxtheme"
+set "FLAGS=%FLAGS% -municode -Wl,--subsystem,windows"
 if "%~1" equ "debug" (
 	set "MFLAGS=-g -gcodeview"
 ) else (
