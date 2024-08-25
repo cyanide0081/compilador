@@ -11,7 +11,7 @@ if "%CC%" == "" (
 )
 
 set "FLAGS=-std=c99 -Wall -Wextra -pedantic"
-set "LFLAGS=-luser32 -lcomctl32 -lgdi32 -lcomdlg32 -luxtheme"
+set "LFLAGS=-luser32 -lcomctl32 -lgdi32 -lcomdlg32 -luxtheme -Wl,--subsystem,windows"
 set "FLAGS=%FLAGS% -municode"
 if "%~1" equ "debug" (
 	set "MFLAGS=-g -gcodeview"
