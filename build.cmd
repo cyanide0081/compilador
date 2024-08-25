@@ -1,12 +1,12 @@
-@rem build script (gcc/clang + win32-msvc)
+@rem build script (llvm-mingw)
 @echo off
 
 set "CLANG=x86_64-w64-mingw32-clang"
 where /Q %CLANG% && (set "CC=%CLANG%")
 
-if "%CC%" equ "" (
+if "%CC%" == "" (
 	echo ERROR: unable to find mingw-w64-clang compiler installed
-	echo ^(refer to https://github.com/mstorsjo/llvm-mingw/releases/^)
+	echo ^(refer to https://github.com/mstorsjo/llvm-mingw/releases/latest^)
 	exit /b
 )
 
@@ -16,12 +16,14 @@ set "FLAGS=%FLAGS% -municode"
 if "%~1" equ "debug" (
 	set "MFLAGS=-g -gcodeview"
 ) else (
-	set "MFLAGS=-DNDEBUG"
+	set "MFLAGS=-DNDEBUG -O2"
 )
 
 @echo on
 %CC% -o compiler_win32.exe compiler_win32.c %FLAGS% %MFLAGS% %LFLAGS%
 @echo off
+
+if %errorlevel% neq 0 exit /b %errorlevel%
 
 set "run="
 if "%~1" equ "run" (
