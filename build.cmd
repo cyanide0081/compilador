@@ -1,32 +1,25 @@
 @rem build script (llvm-mingw)
 @echo off
 
-set "CLANG=x86_64-w64-mingw32-clang"
-where /q %CLANG% && (set "CC=%CLANG%")
-
-set "CLANG=clang"
-where /q %CLANG% && (set "CC=%CLANG%")
-
-if "%CC%" == "" (
-	echo ERROR: unable to find mingw-w64-clang compiler installed
+set "CC=x86_64-w64-mingw32-clang"
+where /q %CC% || (
+	echo ERROR: unable to find mingw-clang compiler installed
 	echo ^(refer to https://github.com/mstorsjo/llvm-mingw/releases/latest^)
 	exit /b
 )
 
 set "FLAGS=-std=c99 -Wall -Wextra -pedantic"
 set "LFLAGS=-luser32 -lcomctl32 -lgdi32 -lcomdlg32 -luxtheme"
-set "FLAGS=%FLAGS% -municode --for-linker /SUBSYSTEM:WINDOWS"
+set "FLAGS=%FLAGS% -municode -Wl,-subsystem,windows"
 if "%~1" == "debug" (
-	set "MFLAGS=-g -gcodeview"
+	set "MFLAGS=-g -gcodeview -Wl,--pdb="
 ) else (
 	set "MFLAGS=-DNDEBUG -O2"
 )
 
 @echo on
-%CC% -o compiler_win32.exe compiler_win32.c %FLAGS% %MFLAGS% %LFLAGS%
+%CC% -o compiler_win32.exe compiler_win32.c %FLAGS% %MFLAGS% %LFLAGS% || exit /b
 @echo off
-
-if %errorlevel% neq 0 exit /b %errorlevel%
 
 set "run="
 if "%~1" == "run" (
