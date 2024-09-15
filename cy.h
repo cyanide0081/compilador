@@ -134,8 +134,12 @@ typedef i8 b8;
 typedef i16 b16;
 typedef i32 b32;
 
-#define true (0 == 0)
-#define false (0 != 0)
+#ifndef true
+    #define true (0 == 0)
+#endif
+#ifndef false
+    #define false (0 != 0)
+#endif
 
 /* --------------------------------- Limits --------------------------------- */
 #define U8_MIN 0U
@@ -530,6 +534,7 @@ void *malloc_align(isize size, isize align)
 CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 {
     CY_UNUSED(allocator_data);
+    CY_UNUSED(old_size);
 
     void *ptr = NULL;
     switch(type) {
@@ -1254,7 +1259,7 @@ CY_DEF CyString cy_string_create(CyAllocator a, const char *str)
 CY_DEF void cy_string_free(CyString str)
 {
     if (str != NULL) {
-        cy_free(CY_STRING_HEADER(str)->alloc, str);
+        cy_free(CY_STRING_HEADER(str)->alloc, CY_STRING_HEADER(str));
     }
 }
 

@@ -76,16 +76,12 @@ typedef struct {
 
 Token *tokenize(String src)
 {
+    CY_UNUSED(src);
     return NULL;
 }
 
 CyString compile(String src_code)
 {
+    CY_UNUSED(src_code);
     return cy_string_create(cy_heap_allocator(), "hi i'm the compiler output");
-}
-
-int main(int argc, const char *argv[])
-{
-    printf("Hello, i'm the compiler!\n");
-    return 0;
 }
