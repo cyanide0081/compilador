@@ -470,6 +470,8 @@ CY_DEF inline char *cy_alloc_string_len(
 
 #define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
 
+#define CY_STATIC_STR_LEN(str) ((sizeof(str) - 1) / sizeof(*(str)))
+
 CY_DEF inline isize cy_str_len(const char *str)
 {
     if (str == NULL) {
@@ -1439,15 +1441,23 @@ CY_DEF CyStringView cy_string_view_substring(
     return cy_string_view_create_len((const char*)str.text + lo, hi - lo);
 }
 
-CY_DEF b32 cy_string_view_are_equal(const CyStringView a, const CyStringView b)
+CY_DEF inline b32 cy_string_view_are_equal(const CyStringView a, const CyStringView b)
 {
     return a.len == b.len &&
         cy_mem_compare((void*)a.text, (void*)b.text, a.len) == 0;
 }
 
-CY_DEF CyString cy_string_append_view(CyString str, CyStringView view)
+CY_DEF inline CyString cy_string_append_view(CyString str, CyStringView view)
 {
     return cy_string_append_len(str, (const char*)view.text, view.len);
+}
+
+CY_DEF inline b32 cy_string_view_has_prefix(CyStringView str, const char *prefix)
+{
+    CyStringView other = cy_string_view_create_c(prefix);
+    return cy_string_view_are_equal(
+        cy_string_view_create_len((const char*)str.text, other.len), other
+    );
 }
 
 /* TODO(cya):

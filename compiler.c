@@ -92,11 +92,11 @@ typedef struct {
 } Utf8AcceptRange;
 
 static const Utf8AcceptRange g_utf8_accept_ranges[] = {
-    {0x80, 0xBF}, 
-    {0xA0, 0xBF}, 
-    {0x80, 0x9F}, 
-    {0x90, 0xBF}, 
-    {0x80, 0x8F}, 
+    {0x80, 0xBF},
+    {0xA0, 0xBF},
+    {0x80, 0x9F},
+    {0x90, 0xBF},
+    {0x80, 0x8F},
 };
 
 static isize utf8_decode(String str, Rune *rune_out)
@@ -104,7 +104,7 @@ static isize utf8_decode(String str, Rune *rune_out)
     if (str.len < 1) {
         return 0;
     }
-    
+
     isize width = 0;
     // TODO(cya): implement
     *rune_out = *str.text;
@@ -117,7 +117,7 @@ static void tokenizer_advance_to_next_rune(Tokenizer *t)
         t->pos.line += 1;
         t->pos.col = 1;
     }
-    
+
     if (t->next >= t->end) {
         t->cur = t->end;
         t->cur_rune = CY_RUNE_EOF;
@@ -155,15 +155,14 @@ static Tokenizer tokenizer_init(String src)
         .next = start,
         .pos = (TokenPos){
             .line = 1,
-            .col = 1,
         },
     };
-    
+
     tokenizer_advance_to_next_rune(&t);
-    if (t.cur_rune == CY_RUNE_BOM) {
+    if (t.cur_rune == CY_RUNE_BOM) { // NOTE(cya): is this even necessary?
         tokenizer_advance_to_next_rune(&t);
     }
-    
+
     return t;
 }
 
@@ -173,7 +172,7 @@ static inline b32 rune_is_letter(Rune r)
         if (r == '_') {
             return true;
         }
-        
+
         // NOTE(cya): (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z');
         return ((u32)r | 0x20) - 0x61 < 26;
     } else {
@@ -196,6 +195,37 @@ static inline b32 rune_is_letter_or_digit(Rune r)
     return rune_is_letter(r) || rune_is_digit(r);
 }
 
+static b32 token_is_ident(String tok)
+{
+    return cy_string_view_has_prefix(tok, "i_") ||
+        cy_string_view_has_prefix(tok, "f_") ||
+        cy_string_view_has_prefix(tok, "b_") ||
+        cy_string_view_has_prefix(tok, "s_");
+}
+
+static b32 token_is_keyword(String tok, i32 *kind_out)
+{
+    for (isize i = C_TOKEN__KEYWORD_BEGIN + 1; i < C_TOKEN__KEYWORD_END; i++) {
+        if (cy_string_view_are_equal(tok, token_strings[i])) {
+            *kind_out = i;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static String token_kind_string_from_enum(TokenKind kind)
+{
+    if (kind < 0 || kind >= C_TOKEN_COUNT) {
+        return token_strings[C_TOKEN_INVALID];
+    } else if (kind > C_TOKEN__KEYWORD_BEGIN && kind < C_TOKEN__KEYWORD_END) {
+        return cy_string_view_create_c("palavra reservada");
+    }
+
+    return token_strings[kind];
+}
+
 static Token tokenizer_get_token(Tokenizer *t)
 {
     Token token = {
@@ -211,63 +241,68 @@ static Token tokenizer_get_token(Tokenizer *t)
     TokenPos cur_pos = t->pos;
     Rune cur_rune = t->cur_rune;
     if (rune_is_letter(cur_rune)) {
-        // NOTE(cya): either ident or keyword
-        token.kind = C_TOKEN_IDENT;
+        // NOTE(cya): could be either ident or keyword
         while (rune_is_letter_or_digit(t->cur_rune)) {
             tokenizer_advance_to_next_rune(t);
         }
 
         token.str.len = t->cur - token.str.text;
-        
+
+        i32 kind;
+        if (token_is_ident(token.str)) {
+            token.kind = C_TOKEN_IDENT;
+            return token;
+        } else if (token_is_keyword(token.str, &kind)) {
+            token.kind = kind;
+            return token;
+        } else {
+            // invalid token
+        }
     } else {
         // NOTE(cya): something else
-        switch (cur_rune) {
-            
-        }
+        token.kind = C_TOKEN_EOF;
+        return token;
+        // switch (cur_rune) {
+
+        // }
     }
-    
+
     token.str.len = t->cur - token.str.text;
     return token;
 }
 
 typedef struct {
-    Token *tokens;
+    Token *arr;
     isize len;
     isize cap;
 } TokenList;
 
 #define C_TOKEN_LIST_INIT_CAP 0x1000
 
-static TokenList tokenize(String src)
+static TokenList tokenize(CyAllocator a, String src)
 {
     TokenList list = {
-        .cap = C_TOKEN_LIST_INIT_CAP,  
+        .cap = C_TOKEN_LIST_INIT_CAP,
     };
 
-    return list;
-    
-    list.tokens = cy_alloc_array(cy_heap_allocator(), Token, list.cap);
-    if (list.tokens == NULL) {
+    list.arr = cy_alloc_array(a, Token, list.cap);
+    if (list.arr == NULL) {
         // TODO(cya): error handling
     }
-            
+
     Tokenizer t = tokenizer_init(src);
     while (t.cur_rune != CY_RUNE_EOF) {
         if (list.len == list.cap) {
             isize new_cap = list.cap * 2;
-            list.tokens = cy_resize_array(
-                cy_heap_allocator(),
-                list.tokens, Token,
-                list.cap, new_cap
-            );
-            if (list.tokens == NULL) {
+            list.arr = cy_resize_array(a, list.arr, Token, list.cap, new_cap);
+            if (list.arr == NULL) {
                 // TODO(cya): error handling
             }
-            
+
             list.cap = new_cap;
         }
-        
-        *list.tokens = tokenizer_get_token(&t);
+
+        *list.arr = tokenizer_get_token(&t);
         list.len += 1;
     }
 
@@ -294,15 +329,16 @@ static int int_to_utf8(isize n, isize max_digits, char *buf, isize cap)
         buf[i] = '0' + n / dividend;
         n %= dividend;
     }
-    
+
     buf[cap] = '\0';
     return digits;
 }
 
-#define STATIC_STR_LEN(str) ((sizeof(str) - 1) / sizeof(*(str)))
-
-static CyString append_token_info(CyString str, String line, String kind, String token)
-{
+static CyString append_token_info(
+    CyString str,
+    String line,
+    String kind, String token
+) {
     str = cy_string_append_view(str, line);
     str = cy_string_pad_right(str, 10, ' ');
 
@@ -310,12 +346,14 @@ static CyString append_token_info(CyString str, String line, String kind, String
     isize col_width = cy_string_len(str) + 24;
     str = cy_string_append_view(str, kind);
     str = cy_string_pad_right(str, col_width, ' ');
-    
+
     str = cy_string_append_view(str, token);
     str = cy_string_append_c(str, "\r\n");
-    
+
     return str;
 }
+
+#define LINE_NUM_MAX_DIGITS 9
 
 static CyString append_tokens_fmt(CyString str, const TokenList *l)
 {
@@ -326,29 +364,31 @@ static CyString append_tokens_fmt(CyString str, const TokenList *l)
         cy_string_view_create_c("lexema")
     );
     for (isize i = 0; i < l->len; i++) {
-        Token *t = &l->tokens[i];
-        
-        char line_buf[4];
-        isize line_buf_len = STATIC_STR_LEN(line_buf);
+        Token *t = &l->arr[i];
+
+        char line_buf[LINE_NUM_MAX_DIGITS + 1];
+        isize line_buf_len = CY_STATIC_STR_LEN(line_buf);
         int_to_utf8(t->pos.line, line_buf_len, line_buf, line_buf_len);
-    
+
         String line = cy_string_view_create_len(line_buf, line_buf_len);
-        String token_kind = token_strings[t->kind];
+        String token_kind = token_kind_string_from_enum(t->kind);
         String token = t->str;
 
         str = append_token_info(str, line, token_kind, token);
     }
-    
+
     return str;
 }
 
 CyString compile(String src_code)
 {
-    TokenList token_list = tokenize(src_code);
+    TokenList token_list = tokenize(cy_heap_allocator(), src_code);
     // TODO(cya): error handling
-    
+
     CyString output = cy_string_create_reserve(cy_heap_allocator(), 0x1000);
     output = append_tokens_fmt(output, &token_list);
-    
+
+    cy_free(cy_heap_allocator(), token_list.arr);
+
     return output;
 }
