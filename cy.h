@@ -330,6 +330,8 @@ typedef struct {
 #define cy_alloc_item(allocator, type) cy_alloc(allocator, sizeof(type))
 #define cy_alloc_array(allocator, type, count) \
     cy_alloc(allocator, (count) * sizeof(type))
+#define cy_resize_array(allocator, arr, type, old_count, new_count) \
+    cy_resize(allocator, arr, (old_count) * sizeof(type), (new_count) * sizeof(type))
 
 CY_DEF inline void *cy_alloc_align(CyAllocator a, isize size, isize align)
 {
@@ -1313,9 +1315,30 @@ CY_DEF CyString cy_string_append(CyString str, CyString other)
     return cy_string_append_len(str, other, cy_string_len(other));
 }
 
-CY_DEF CyString cy_string_appendc(CyString str, const char *other)
+CY_DEF CyString cy_string_append_c(CyString str, const char *other)
 {
     return cy_string_append_len(str, other, cy_str_len(other));
+}
+
+CY_DEF CyString cy_string_append_rune(CyString str, Rune r)
+{
+    // TODO(cya): utf-8 encode rune
+    isize width = 1;
+    return cy_string_append_len(str, (const char*)&r, width);
+}
+
+CY_DEF CyString cy_string_pad_right(CyString str, isize width, Rune r)
+{
+    // TODO(cya): calculate width with utf8_width proc (to be implemented)
+    isize str_width = cy_string_len(str);
+    isize rune_width = 1;
+    while (str_width < width) {
+        str = cy_string_append_rune(str, r);
+        str_width += rune_width;
+    }
+
+    CY_VALIDATE_PTR(str);
+    return str;
 }
 
 CY_DEF CyString cy_string_set(CyString str, const char *c_str)
@@ -1379,7 +1402,7 @@ CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
 }
 
 typedef struct {
-    const u8 *str;
+    const u8 *text;
     isize len;
 } CyStringView;
 
@@ -1390,7 +1413,7 @@ CY_DEF CyStringView cy_string_view_create_len(const char *str, isize len)
     }
 
     return (CyStringView){
-        .str = (const u8*)str,
+        .text = (const u8*)str,
         .len = len,
     };
 }
@@ -1413,13 +1436,18 @@ CY_DEF CyStringView cy_string_view_substring(
     isize max = str.len, lo = begin_idx, hi = end_idx;
     CY_ASSERT_MSG(lo <= hi && hi <= max, "%td..%td..%td", lo, hi, max);
 
-    return cy_string_view_create_len((const char*)str.str + lo, hi - lo);
+    return cy_string_view_create_len((const char*)str.text + lo, hi - lo);
 }
 
 CY_DEF b32 cy_string_view_are_equal(const CyStringView a, const CyStringView b)
 {
     return a.len == b.len &&
-        cy_mem_compare((void*)a.str, (void*)b.str, a.len) == 0;
+        cy_mem_compare((void*)a.text, (void*)b.text, a.len) == 0;
+}
+
+CY_DEF CyString cy_string_append_view(CyString str, CyStringView view)
+{
+    return cy_string_append_len(str, (const char*)view.text, view.len);
 }
 
 /* TODO(cya):
