@@ -106,6 +106,7 @@ static isize utf8_decode(String str, Rune *rune_out)
     }
 
     isize width = 0;
+    (void)width;
     // TODO(cya): implement
     *rune_out = *str.text;
     return 1;
@@ -197,6 +198,7 @@ static inline b32 rune_is_letter_or_digit(Rune r)
 
 static b32 token_is_ident(String tok)
 {
+    // TODO(cya): validate the no-repeating-uppercases condition
     return cy_string_view_has_prefix(tok, "i_") ||
         cy_string_view_has_prefix(tok, "f_") ||
         cy_string_view_has_prefix(tok, "b_") ||
@@ -215,7 +217,7 @@ static b32 token_is_keyword(String tok, i32 *kind_out)
     return false;
 }
 
-static String token_kind_string_from_enum(TokenKind kind)
+static String string_from_token_kind(TokenKind kind)
 {
     if (kind < 0 || kind >= C_TOKEN_COUNT) {
         return token_strings[C_TOKEN_INVALID];
@@ -226,19 +228,30 @@ static String token_kind_string_from_enum(TokenKind kind)
     return token_strings[kind];
 }
 
+static TokenKind token_kind_from_string(String str)
+{
+    for (isize i = 0; i < C_TOKEN_COUNT; i++) {
+        if (cy_string_view_are_equal(str, token_strings[i])) {
+            return i;
+        }
+    }
+
+    return C_TOKEN_INVALID; 
+}
+
 static Token tokenizer_get_token(Tokenizer *t)
 {
+    TokenPos cur_pos = t->pos;
     Token token = {
         .kind = C_TOKEN_INVALID,
-        .pos.line = t->pos.line,
-        .pos.col = t->pos.col,
+        .pos.line = cur_pos.line,
+        .pos.col = cur_pos.col,
         .str = (String){
             .text = t->cur,
             .len = 1,
         },
     };
 
-    TokenPos cur_pos = t->pos;
     Rune cur_rune = t->cur_rune;
     if (rune_is_letter(cur_rune)) {
         // NOTE(cya): could be either ident or keyword
@@ -260,11 +273,54 @@ static Token tokenizer_get_token(Tokenizer *t)
         }
     } else {
         // NOTE(cya): something else
-        token.kind = C_TOKEN_EOF;
-        return token;
-        // switch (cur_rune) {
+        switch (cur_rune) {
+        case '0': case '1': case '2': case '3': case '4':
+        case '5': case '6': case '7': case '8': case '9': {
+             // TODO(cya): numeric constant
+        } break;
+        case '"': {
+            // string literal            
+        } break;
+        case ';':
+        case ',':
+        case '(':
+        case ')':
+        case '<':
+        case '+':
+        case '-':
+        case '*':
+        case '/': {
+            String s = cy_string_view_create_len((const char*)t->cur, 1);
+            tokenizer_advance_to_next_rune(t);
+            token.kind = token_kind_from_string(s);
+            return token;
+        } break;
+        case '&': 
+        case '|': 
+        case '=': 
+        case '!': 
+        case '>': {
+            String s = cy_string_view_create_len((const char*)t->cur, 1);
+            Rune next_rune = *t->next;
+            b32 is_cmp = (cur_rune == '&' && next_rune == '&') ||
+                (cur_rune == '|' && next_rune == '|') ||
+                (cur_rune == '=' && next_rune == '=') ||
+                (cur_rune == '!' && next_rune == '=');
+            b32 is_comment = (cur_rune == '>' && next_rune == '@');
+            
+            if (is_cmp || is_comment) {
+                s.len += 1;
+                tokenizer_advance_to_next_rune(t);
+            }
 
-        // }
+            tokenizer_advance_to_next_rune(t);
+            token.kind = token_kind_from_string(s);
+            return token;
+        } break;
+        default: {
+            // TODO(cya): either whitespace(\s\t\r\n) or invalid symbol
+        }
+        }
     }
 
     token.str.len = t->cur - token.str.text;
@@ -371,7 +427,7 @@ static CyString append_tokens_fmt(CyString str, const TokenList *l)
         int_to_utf8(t->pos.line, line_buf_len, line_buf, line_buf_len);
 
         String line = cy_string_view_create_len(line_buf, line_buf_len);
-        String token_kind = token_kind_string_from_enum(t->kind);
+        String token_kind = string_from_token_kind(t->kind);
         String token = t->str;
 
         str = append_token_info(str, line, token_kind, token);
