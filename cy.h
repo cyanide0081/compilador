@@ -1131,7 +1131,7 @@ void stack_deinit(Stack *stack)
  * general-purpose heap allocator to replace malloc
  */
 
- /* ============================ Char functions ============================= */
+ /* ============================== Char procs =============================== */
 CY_DEF const char *cy_char_first_occurence(const char *str, char c)
 {
     for (; *str != c; str++) {
@@ -1458,6 +1458,21 @@ CY_DEF inline b32 cy_string_view_has_prefix(CyStringView str, const char *prefix
     return cy_string_view_are_equal(
         cy_string_view_create_len((const char*)str.text, other.len), other
     );
+}
+
+CY_DEF b32 cy_string_view_contains(CyStringView str, const char *char_set)
+{
+    isize len = cy_str_len(char_set);
+    // TODO(cya): unicode rune support
+    for (isize i = 0; i < str.len; i++) {
+        for (isize j = 0; j < len; j++) {
+            if (str.text[i] == char_set[j]) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 /* TODO(cya):
