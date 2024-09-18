@@ -224,7 +224,7 @@ static b32 token_is_ident(String tok)
     if (tok.len < 3) {
         return false;
     }
-    
+
     const u8 *s = tok.text;
     b32 has_prefix = (s[1] == '_' && (
         s[0] == 'i' || s[0] == 'f' || s[0] == 'b' || s[0] == 's'
@@ -238,14 +238,14 @@ static b32 token_is_ident(String tok)
         if (!rune_is_alphanumeric(r)) {
             return false;
         }
-        
+
         b32 has_adjacent_uppercases = i < tok.len - 1 &&
             rune_is_uppercase(r) && rune_is_uppercase(s[i + 1]);
         if (has_adjacent_uppercases) {
             return false;
-        }            
+        }
     }
-    
+
     return true;
 }
 
@@ -296,7 +296,7 @@ static TokenKind token_kind_from_string(String str)
         }
     }
 
-    return C_TOKEN_INVALID; 
+    return C_TOKEN_INVALID;
 }
 
 static inline void tokenizer_error(
@@ -309,7 +309,7 @@ static inline void tokenizer_error(
 static Token tokenizer_get_token(Tokenizer *t)
 {
     tokenizer_skip_whitespace(t);
-    
+
     TokenPos cur_pos = t->pos;
     Token token = {
         .kind = C_TOKEN_INVALID,
@@ -367,21 +367,37 @@ static Token tokenizer_get_token(Tokenizer *t)
                  tokenizer_advance_to_next_rune(t);
                  cur_rune = t->cur_rune;
             }
-             
+
             if (cur_rune == ',') {
                 tokenizer_advance_to_next_rune(t);
                 cur_rune = t->cur_rune;
                 if (rune_is_digit(cur_rune)) {
                     token.kind = C_TOKEN_FLOAT;
                     // NOTE(cya): skip leading zeroes
-                    do {
-                        tokenizer_advance_to_next_rune(t);
-                        cur_rune = t->cur_rune;
-                    } while (cur_rune == '0');
-                    
-                    while (rune_is_non_zero_digit(cur_rune)) {
-                        tokenizer_advance_to_next_rune(t);
-                        cur_rune = t->cur_rune;
+                    if (cur_rune == '0') {
+                        const u8 *start = t->cur;
+                        const u8 *end = start;
+                        while (*end == '0') {
+                            end += 1;
+                        }
+
+                        if (rune_is_non_zero_digit(*end)) {
+                            isize stride = end - start;
+                            while (stride-- > 0) {
+                                tokenizer_advance_to_next_rune(t);
+                            }
+
+                            cur_rune = t->cur_rune;
+                        } else {
+                            tokenizer_advance_to_next_rune(t);
+                        }
+                    }
+
+                    if (t->err == T_ERR_NONE) {
+                        while (rune_is_non_zero_digit(cur_rune)) {
+                            tokenizer_advance_to_next_rune(t);
+                            cur_rune = t->cur_rune;
+                        }
                     }
                 } else {
                     tokenizer_error(t, &token, T_ERR_INCOMPLETE_FLOAT);
@@ -405,13 +421,13 @@ static Token tokenizer_get_token(Tokenizer *t)
                     if (*t->next != '"') {
                         bad_tok.str.len += 1;
                     }
-                    
+
                     tokenizer_error(t, &bad_tok, T_ERR_INVALID_FMT_SPEC);
                 } else if (cur_rune == '\n') {
                     tokenizer_error(t, &token, T_ERR_NEWLINE_IN_STRING);
                 }
-            } while (t->cur < t->end && *t->cur != '"'); 
-            
+            } while (t->cur < t->end && *t->cur != '"');
+
             if (t->err == T_ERR_NONE && t->next >= t->end) {
                 tokenizer_error(t, &token, T_ERR_INCOMPLETE_STRING);
             } else {
@@ -433,10 +449,10 @@ static Token tokenizer_get_token(Tokenizer *t)
             token.kind = token_kind_from_string(s);
             return token;
         } break;
-        case '&': 
-        case '|': 
-        case '=': 
-        case '!': 
+        case '&':
+        case '|':
+        case '=':
+        case '!':
         case '>': {
             String s = cy_string_view_create_len((const char*)t->cur, 1);
             if (t->next < t->end) {
@@ -454,10 +470,10 @@ static Token tokenizer_get_token(Tokenizer *t)
                 } else if (is_comment) {
                     const u8 *start = t->cur;
                     token.str.len += 1;
-                    
+
                     tokenizer_advance_to_next_rune(t);
                     tokenizer_advance_to_next_rune(t);
-                   
+
                     while (t->cur < t->end && t->cur_rune != '@') {
                         tokenizer_advance_to_next_rune(t);
                     }
@@ -468,7 +484,7 @@ static Token tokenizer_get_token(Tokenizer *t)
                         const u8 *end = t->next;
                         tokenizer_advance_to_next_rune(t);
                         tokenizer_advance_to_next_rune(t);
-                        
+
                         b32 malformed =
                             *(end - 2) != '\n' || *(end - 3) != '\r' ||
                             *(start + 2) != '\r' || *(start + 3) != '\n';
@@ -535,9 +551,9 @@ static TokenList tokenize(CyAllocator a, Tokenizer *t)
         if (t->err != T_ERR_NONE) {
             cy_free(a, list.arr);
             cy_mem_set(&list, 0, sizeof(list));
-            break;            
+            break;
         }
-        
+
         list.len += 1;
     }
 
@@ -581,10 +597,10 @@ static CyString append_token_info(
     isize col_width = cy_string_len(new_line) + 24;
     new_line = cy_string_append_view(new_line, kind);
     new_line = cy_string_pad_right(new_line, col_width, ' ');
-    
+
     new_line = cy_string_append_view(new_line, token);
     str = cy_string_append(str, new_line);
-    
+
     cy_string_free(new_line);
     return str;
 }
@@ -629,10 +645,10 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
     if (t->err == T_ERR_OUT_OF_MEMORY) {
         return NULL; // NOTE(cya): since we're out of memory
     }
-    
+
     CyString msg = cy_string_create_reserve(cy_heap_allocator(), 64);
     msg = cy_string_append_c(msg, "linha ");
-    
+
     char line_num[LINE_NUM_MAX_DIGITS + 1];
     isize line_num_cap = CY_STATIC_STR_LEN(line_num);
     isize line_num_len = int_to_utf8(
@@ -644,7 +660,7 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
     msg = cy_string_append_c(msg, ": '");
     msg = cy_string_append_view(msg, t->bad_tok.str);
     msg = cy_string_append_c(msg, "' ");
-    
+
     TokenizerError err = t->err;
     switch (err) {
     case T_ERR_INVALID_SYMBOL: {
@@ -657,7 +673,7 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
         msg = cy_string_append_c(msg, "palavra reservada desconhecida");
     } break;
     case T_ERR_INCOMPLETE_COMMENT: {
-        msg = cy_string_append_c(msg, "comentário incompleto (inserir @<)");
+        msg = cy_string_append_c(msg, "comentário incompleto (feche-o com @<)");
     } break;
     case T_ERR_MALFORMED_COMMENT: {
         msg = cy_string_append_c(msg, "comentário mal-formatado");
@@ -666,18 +682,18 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
         msg = cy_string_append_c(msg, "constante_float incompleta");
     } break;
     case T_ERR_INCOMPLETE_STRING: {
-        msg = cy_string_append_c(msg, "constante_string incompleta");
+        msg = cy_string_append_c(msg, "constante_string incompleta (feche-a com \")");
     } break;
     case T_ERR_NEWLINE_IN_STRING: {
         msg = cy_string_append_c(
-            msg, "quebra de linha dentro de constante_string"
+            msg, "quebra de linha ilegal dentro de constante_string"
         );
     } break;
     case T_ERR_INVALID_FMT_SPEC: {
         msg = cy_string_append_c(msg, "especificador de formato inválido");
     } break;
     default: {
-        msg = cy_string_append_c(msg, "(fatal) erro de tokenização");
+        msg = cy_string_append_c(msg, "(fatal) erro ao tokenizar código");
     } break;
     }
 
