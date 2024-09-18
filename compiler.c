@@ -9,10 +9,11 @@
     TOKEN_KIND(C_TOKEN_EOF, "EOF"), \
 \
 TOKEN_KIND(C_TOKEN__LITERAL_BEGIN, ""), \
-    TOKEN_KIND(C_TOKEN_IDENT, "Identifier"), \
-    TOKEN_KIND(C_TOKEN_INTEGER, "Integer"), \
-    TOKEN_KIND(C_TOKEN_FLOAT, "Float"), \
-    TOKEN_KIND(C_TOKEN_STRING, "String"), \
+    TOKEN_KIND(C_TOKEN_IDENT, "identificador"), \
+    TOKEN_KIND(C_TOKEN_INTEGER, "constante_int"), \
+    TOKEN_KIND(C_TOKEN_FLOAT, "constante_float"), \
+    TOKEN_KIND(C_TOKEN_STRING, "constante_string"), \
+    TOKEN_KIND(C_TOKEN_COMMENT, "comentário"), \
 TOKEN_KIND(C_TOKEN__LITERAL_END, ""), \
 \
 TOKEN_KIND(C_TOKEN__OPERATOR_BEGIN, ""), \
@@ -170,14 +171,10 @@ static Tokenizer tokenizer_init(String src)
 static inline b32 rune_is_letter(Rune r)
 {
     if (r < 0x80) {
-        if (r == '_') {
-            return true;
-        }
-
         // NOTE(cya): (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z');
         return ((u32)r | 0x20) - 0x61 < 26;
     } else {
-        // TODO(cya): detect unicode letters
+        // TODO(cya): detect non-ascii unicode letters
         return false;
     }
 }
@@ -191,18 +188,43 @@ static inline b32 rune_is_digit(Rune r)
     }
 }
 
-static inline b32 rune_is_letter_or_digit(Rune r)
+static inline b32 rune_is_alphanumeric(Rune r)
 {
     return rune_is_letter(r) || rune_is_digit(r);
 }
 
+static inline b32 rune_is_uppercase(Rune r) {
+    return (u32)r - 0x41 < 26;
+}
+
 static b32 token_is_ident(String tok)
 {
-    // TODO(cya): validate the no-repeating-uppercases condition
-    return cy_string_view_has_prefix(tok, "i_") ||
-        cy_string_view_has_prefix(tok, "f_") ||
-        cy_string_view_has_prefix(tok, "b_") ||
-        cy_string_view_has_prefix(tok, "s_");
+    if (tok.len < 3) {
+        return false;
+    }
+    
+    const u8 *s = tok.text;
+    b32 has_prefix = (s[1] == '_' && (
+        s[0] == 'i' || s[0] == 'f' || s[0] == 'b' || s[0] == 's'
+    ));
+    if (!has_prefix) {
+        return false;
+    }
+
+    for (isize i = 2; i < tok.len; i++) {
+        Rune r = s[i];
+        if (!rune_is_alphanumeric(r)) {
+            return false;
+        }
+        
+        b32 has_adjacent_uppercases = i < tok.len - 1 &&
+            rune_is_uppercase(r) && rune_is_uppercase(s[i + 1]);
+        if (has_adjacent_uppercases) {
+            return false;
+        }            
+    }
+    
+    return true;
 }
 
 static b32 token_is_keyword(String tok, i32 *kind_out)
@@ -221,6 +243,8 @@ static String string_from_token_kind(TokenKind kind)
 {
     if (kind < 0 || kind >= C_TOKEN_COUNT) {
         return token_strings[C_TOKEN_INVALID];
+    } else if (kind > C_TOKEN__OPERATOR_BEGIN && kind < C_TOKEN__OPERATOR_END) {
+        return cy_string_view_create_c("símbolo especial");
     } else if (kind > C_TOKEN__KEYWORD_BEGIN && kind < C_TOKEN__KEYWORD_END) {
         return cy_string_view_create_c("palavra reservada");
     }
@@ -255,8 +279,9 @@ static Token tokenizer_get_token(Tokenizer *t)
     Rune cur_rune = t->cur_rune;
     if (rune_is_letter(cur_rune)) {
         // NOTE(cya): could be either ident or keyword
-        while (rune_is_letter_or_digit(t->cur_rune)) {
+        while (rune_is_alphanumeric(cur_rune) || cur_rune == '_') {
             tokenizer_advance_to_next_rune(t);
+            cur_rune = t->cur_rune;
         }
 
         token.str.len = t->cur - token.str.text;
@@ -269,17 +294,42 @@ static Token tokenizer_get_token(Tokenizer *t)
             token.kind = kind;
             return token;
         } else {
-            // invalid token
+            // TODO(cya): malformed alphanumeric token
+            return token;
         }
     } else {
-        // NOTE(cya): something else
         switch (cur_rune) {
         case '0': case '1': case '2': case '3': case '4':
         case '5': case '6': case '7': case '8': case '9': {
              // TODO(cya): numeric constant
         } break;
         case '"': {
-            // string literal            
+            do {
+                tokenizer_advance_to_next_rune(t);
+                cur_rune = t->cur_rune;
+
+                if (cur_rune == '%' && t->next < t->end && *t->next != 'x') {
+                    // TODO(cya): invalid format specifier
+                    return token;
+                }
+                if (cur_rune == '\n') {
+                    // TODO(cya): line break inside string literal
+                    return token;
+                }
+            } while (t->next < t->end && *t->next != '"'); 
+
+            if (t->next >= t->end) {
+                // TODO(cya): missing closing quote marks
+                return token;
+            } else {
+                tokenizer_advance_to_next_rune(t);
+            }
+            
+            tokenizer_advance_to_next_rune(t);
+            
+            token.str.len = t->cur - token.str.text;
+            token.kind = C_TOKEN_STRING;
+            return token;
         } break;
         case ';':
         case ',':
@@ -301,16 +351,47 @@ static Token tokenizer_get_token(Tokenizer *t)
         case '!': 
         case '>': {
             String s = cy_string_view_create_len((const char*)t->cur, 1);
-            Rune next_rune = *t->next;
-            b32 is_cmp = (cur_rune == '&' && next_rune == '&') ||
-                (cur_rune == '|' && next_rune == '|') ||
-                (cur_rune == '=' && next_rune == '=') ||
-                (cur_rune == '!' && next_rune == '=');
-            b32 is_comment = (cur_rune == '>' && next_rune == '@');
-            
-            if (is_cmp || is_comment) {
-                s.len += 1;
-                tokenizer_advance_to_next_rune(t);
+            if (t->next < t->end) {
+                Rune next_rune = *t->next;
+                b32 is_cmp = (cur_rune == '&' && next_rune == '&') ||
+                    (cur_rune == '|' && next_rune == '|') ||
+                    (cur_rune == '=' && next_rune == '=') ||
+                    (cur_rune == '!' && next_rune == '=');
+                b32 is_comment = (cur_rune == '>' && next_rune == '@');
+                if (is_cmp) {
+                    s.len += 1;
+                    tokenizer_advance_to_next_rune(t);
+                } else if (is_comment) {
+                    tokenizer_advance_to_next_rune(t);
+                    isize diff = t->end - t->next;
+                    if (diff < 6) {
+                        // TODO(cya): incomplete comment literal
+                    }
+                    
+                    if (*t->next != '\r' || *(t->next + 1) != '\n') {
+                        // TODO(cya): missing newline
+                    }
+
+                    while (t->cur < t->end && t->cur_rune != '@') {
+                        tokenizer_advance_to_next_rune(t);
+                    }
+
+                    if (t->end - t->cur < 2 || *t->next != '<') {
+                        // TODO(cya): incomplete comment literal
+                    }
+
+                    if (*(t->cur - 1) != '\n' || *(t->cur - 2) != '\r') {
+                        // TODO(cya): missing newline
+                    } else {
+                        tokenizer_advance_to_next_rune(t);
+                    }
+
+                    tokenizer_advance_to_next_rune(t);
+                    
+                    token.str.len = t->cur - token.str.text;
+                    token.kind = C_TOKEN_COMMENT;
+                    return token;
+                }
             }
 
             tokenizer_advance_to_next_rune(t);
