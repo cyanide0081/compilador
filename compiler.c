@@ -349,6 +349,9 @@ static Token tokenizer_get_token(Tokenizer *t)
         }
     } else {
         switch (cur_rune) {
+        case CY_RUNE_EOF: {
+            token.kind = C_TOKEN_EOF;
+        } break;
         case '0':
         case '1':
         case '2':
@@ -530,7 +533,7 @@ static TokenList tokenize(CyAllocator a, Tokenizer *t)
     }
 
     isize e = 0;
-    while (t->cur_rune != CY_RUNE_EOF) {
+    for (;;) {
         if (list.len == list.cap) {
             isize new_cap = list.cap * 2;
             list.arr = cy_resize_array(a, list.arr, Token, list.cap, new_cap);
@@ -543,7 +546,12 @@ static TokenList tokenize(CyAllocator a, Tokenizer *t)
             list.cap = new_cap;
         }
 
-        list.arr[e++] = tokenizer_get_token(t);
+        Token new_tok = tokenizer_get_token(t);
+        if (new_tok.kind == C_TOKEN_EOF) {
+            break;
+        }
+
+        list.arr[e++] = new_tok;
         if (t->err != T_ERR_NONE) {
             cy_free(a, list.arr);
             cy_mem_set(&list, 0, sizeof(list));
@@ -673,7 +681,7 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
         desc = "comentário incompleto (feche-o com @<)";
     } break;
     case T_ERR_MALFORMED_COMMENT: {
-        desc = "comentário mal-formatado";
+        desc = "comentário mal formatado";
     } break;
     case T_ERR_INCOMPLETE_FLOAT: {
         desc = "constante_float incompleta";
