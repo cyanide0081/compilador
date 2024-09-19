@@ -1,7 +1,7 @@
 #ifndef _CY_H
 #define _CY_H
 
-// NOTE(cya): a lot of ideas here are from GingerBill's gb library
+// NOTE(cya): a lot of this library is borrowed from GingerBill's gb library
 // https://github.com/gingerBill/gb/blob/master/gb.h
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -494,6 +494,31 @@ CY_DEF inline isize cy_str_len(const char *str)
     while (*str != '\0') str += 1;
 
     return str - begin;
+}
+
+CY_DEF inline isize cy_utf8_codepoints(const char *str)
+{
+    isize count = 0;
+    while (*str != '\0') {
+        u8 c = *str;
+        u8 inc = 0;
+        if (c < 0x80) {
+            inc = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            inc = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            inc = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            inc = 4;
+        } else {
+            return -1;
+        }
+
+        str += inc;
+        count += 1;
+    }
+
+    return count;
 }
 
 CY_DEF inline char *cy_alloc_string(CyAllocator a, const char *str)
@@ -1332,7 +1357,7 @@ CY_DEF CyString cy_string_append_rune(CyString str, Rune r)
 CY_DEF CyString cy_string_pad_right(CyString str, isize width, Rune r)
 {
     // TODO(cya): calculate width with utf8_width proc (to be implemented)
-    isize str_width = cy_string_len(str);
+    isize str_width = cy_utf8_codepoints(str);
     isize rune_width = 1;
     while (str_width < width) {
         str = cy_string_append_rune(str, r);

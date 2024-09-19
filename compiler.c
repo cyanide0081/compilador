@@ -1,8 +1,6 @@
-#include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include "cy.h"
 
-#include "utils.h"
+typedef CyStringView String;
 
 #define TOKEN_KINDS \
     TOKEN_KIND(C_TOKEN_INVALID, "símbolo inválido"), \
@@ -145,10 +143,11 @@ static void tokenizer_advance_to_next_rune(Tokenizer *t)
     t->cur = t->next;
     Rune rune = *t->cur;
     if (rune == 0) {
-        // TODO(cya): error invalid NUL char
-        t->next += 1;
+        // TODO(cya): test this
+        t->cur_rune = CY_RUNE_INVALID;
+        return;
     } else if (rune & 0x80) {
-        // NOTE(cya): not ASCII
+        // NOTE(cya): non-ASCII UTF-8 code unit
         isize width = utf8_decode((String){
             .text = t->cur,
             .len = t->end - t->cur
@@ -162,7 +161,7 @@ static void tokenizer_advance_to_next_rune(Tokenizer *t)
     t->pos.col += 1;
 }
 
-static Tokenizer tokenizer_init(String src)
+static inline Tokenizer tokenizer_init(String src)
 {
     const u8 *start = (const u8*)src.text;
     const u8 *end = start + src.len;
@@ -263,19 +262,20 @@ static inline b32 token_is_keyword(String tok, i32 *kind_out)
 
 static inline b32 is_whitespace(Rune r)
 {
+    // TODO(cya): maybe detect Unicode whitespace chars?
     return r == ' ' || r == '\t' ||
         r == '\r' || r == '\n' ||
         r == '\v' || r == '\f';
 }
 
-static void tokenizer_skip_whitespace(Tokenizer *t)
+static inline void tokenizer_skip_whitespace(Tokenizer *t)
 {
     while (is_whitespace(t->cur_rune)) {
         tokenizer_advance_to_next_rune(t);
     }
 }
 
-static String string_from_token_kind(TokenKind kind)
+static inline String string_from_token_kind(TokenKind kind)
 {
     if (kind < 0 || kind >= C_TOKEN_COUNT) {
         return token_strings[C_TOKEN_INVALID];
@@ -288,7 +288,7 @@ static String string_from_token_kind(TokenKind kind)
     return token_strings[kind];
 }
 
-static TokenKind token_kind_from_string(String str)
+static inline TokenKind token_kind_from_string(String str)
 {
     for (isize i = 0; i < C_TOKEN_COUNT; i++) {
         if (cy_string_view_are_equal(str, token_strings[i])) {
@@ -308,6 +308,7 @@ static inline void tokenizer_error(
 
 static Token tokenizer_get_token(Tokenizer *t)
 {
+    // TODO(cya): move some parsing cases into their own procedures
     tokenizer_skip_whitespace(t);
 
     TokenPos cur_pos = t->pos;
@@ -359,13 +360,13 @@ static Token tokenizer_get_token(Tokenizer *t)
         case '8':
         case '9': {
             if (cur_rune != '0') {
-                 do {
-                     tokenizer_advance_to_next_rune(t);
-                     cur_rune = t->cur_rune;
-                 } while ((rune_is_non_zero_digit(cur_rune)));
+                do {
+                    tokenizer_advance_to_next_rune(t);
+                    cur_rune = t->cur_rune;
+                } while ((rune_is_digit(cur_rune)));
             } else {
-                 tokenizer_advance_to_next_rune(t);
-                 cur_rune = t->cur_rune;
+                tokenizer_advance_to_next_rune(t);
+                cur_rune = t->cur_rune;
             }
 
             if (cur_rune == ',') {
@@ -373,31 +374,25 @@ static Token tokenizer_get_token(Tokenizer *t)
                 cur_rune = t->cur_rune;
                 if (rune_is_digit(cur_rune)) {
                     token.kind = C_TOKEN_FLOAT;
-                    // NOTE(cya): skip leading zeroes
-                    if (cur_rune == '0') {
-                        const u8 *start = t->cur;
-                        const u8 *end = start;
-                        while (*end == '0') {
-                            end += 1;
-                        }
 
-                        if (rune_is_non_zero_digit(*end)) {
-                            isize stride = end - start;
-                            while (stride-- > 0) {
-                                tokenizer_advance_to_next_rune(t);
-                            }
+                    const u8 *start = t->cur;
+                    const u8 *end = start;
+                    do {
+                        end += 1;
+                    } while ((rune_is_digit(*end)));
 
-                            cur_rune = t->cur_rune;
-                        } else {
-                            tokenizer_advance_to_next_rune(t);
-                        }
+                    while (*(end - 1) == '0') {
+                        end -= 1;
                     }
 
-                    if (t->err == T_ERR_NONE) {
-                        while (rune_is_non_zero_digit(cur_rune)) {
-                            tokenizer_advance_to_next_rune(t);
-                            cur_rune = t->cur_rune;
-                        }
+                    isize adv_len = end - start;
+                    if (end == start && *start == '0') {
+                        adv_len = 1;
+                    }
+
+                    while (adv_len-- > 0) {
+                        tokenizer_advance_to_next_rune(t);
+                        cur_rune = t->cur_rune;
                     }
                 } else {
                     tokenizer_error(t, &token, T_ERR_INCOMPLETE_FLOAT);
@@ -523,6 +518,7 @@ typedef struct {
 
 static TokenList tokenize(CyAllocator a, Tokenizer *t)
 {
+    // TODO(cya): pick more specialized allocators
     TokenList list = {
         .cap = C_TOKEN_LIST_INIT_CAP,
     };
@@ -594,7 +590,7 @@ static CyString append_token_info(
     new_line = cy_string_pad_right(new_line, 10, ' ');
 
     // TODO(cya): replace with utf8_width
-    isize col_width = cy_string_len(new_line) + 24;
+    isize col_width = cy_utf8_codepoints(new_line) + 24;
     new_line = cy_string_append_view(new_line, kind);
     new_line = cy_string_pad_right(new_line, col_width, ' ');
 
@@ -661,43 +657,42 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
     msg = cy_string_append_view(msg, t->bad_tok.str);
     msg = cy_string_append_c(msg, "' ");
 
+    const char *desc = NULL;
     TokenizerError err = t->err;
     switch (err) {
     case T_ERR_INVALID_SYMBOL: {
-        msg = cy_string_append_c(msg, "símbolo inválido");
+        desc = "símbolo inválido";
     } break;
     case T_ERR_INVALID_IDENT: {
-        msg = cy_string_append_c(msg, "identificador malformado");
+        desc = "identificador malformado";
     } break;
     case T_ERR_UNKNOWN_KEYWORD: {
-        msg = cy_string_append_c(msg, "palavra reservada desconhecida");
+        desc = "palavra reservada desconhecida";
     } break;
     case T_ERR_INCOMPLETE_COMMENT: {
-        msg = cy_string_append_c(msg, "comentário incompleto (feche-o com @<)");
+        desc = "comentário incompleto (feche-o com @<)";
     } break;
     case T_ERR_MALFORMED_COMMENT: {
-        msg = cy_string_append_c(msg, "comentário mal-formatado");
+        desc = "comentário mal-formatado";
     } break;
     case T_ERR_INCOMPLETE_FLOAT: {
-        msg = cy_string_append_c(msg, "constante_float incompleta");
+        desc = "constante_float incompleta";
     } break;
     case T_ERR_INCOMPLETE_STRING: {
-        msg = cy_string_append_c(msg, "constante_string incompleta (feche-a com \")");
+        desc = "constante_string incompleta (feche-a com \")";
     } break;
     case T_ERR_NEWLINE_IN_STRING: {
-        msg = cy_string_append_c(
-            msg, "quebra de linha ilegal dentro de constante_string"
-        );
+        desc = "quebra de linha ilegal dentro de constante_string";
     } break;
     case T_ERR_INVALID_FMT_SPEC: {
-        msg = cy_string_append_c(msg, "especificador de formato inválido");
+        desc = "especificador de formato inválido";
     } break;
     default: {
-        msg = cy_string_append_c(msg, "(fatal) erro ao tokenizar código");
+        desc = "(fatal) erro não identificado ao tokenizar código";
     } break;
     }
 
-    return msg;
+    return cy_string_append_c(msg, desc);
 }
 
 CyString compile(String src_code)
