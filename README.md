@@ -50,7 +50,7 @@ Abaixo seguem suas definições e expressões regulares:
 \"([^\n\"%]|%x)*\"
 ```
 
-* **comentário**: `>@,`, seguido uma quebra de linha, uma sequência qualquer
+* **comentário**: `>@`, seguido por uma quebra de linha, uma sequência qualquer
   de caracteres exceto `@`, uma quebra de linha e `@<:`
 ```
 >@\n[^@]*\n@<
