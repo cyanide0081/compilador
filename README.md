@@ -14,14 +14,20 @@ de pequenos programas.
 
 ## Especificação léxica (*tokens*)
 
-A linguagem possui seis tipos distintos de *tokens*: palavras reservadas, 
-identificadores, constantes (*int*, *float* e *string*) e comentários.
-Abaixo seguem suas definições e expressões regulares:
+A linguagem possui sete tipos distintos de *tokens*: palavras reservadas,
+símbolos especiais,  identificadores, constantes (*int*, *float* e *string*)
+e comentários. Abaixo seguem suas definições e expressões regulares:
 
 * **palavra reservada**: uma letra minúscula, seguida por zero ou mais letras:
 ```
 [a-z]([a-z]|[A-Z])*
 ```
+
+As palavras reservadas da linguagem são: *main*, *end*, *if*, *elif*, *else*,
+*false*, *true*, *read*, write *writeln*, *repeat*, *until*, e *while*. 
+
+* **símbolo especial**: uma das seguintes sequências: _&& || ! == != < >
+  \+ \- \* / , ; = ( )_.
 
 * **identificador**: um prefixo, seguido por uma letra e zero ou mais letras
   ou dígitos, desde que não hajam letras maiúsculas consecutivas 
@@ -59,7 +65,8 @@ Abaixo seguem suas definições e expressões regulares:
 ## Como compilar o compilador
 
 1. Baixar [LLVM-MinGW](https://github.com/mstorsjo/llvm-mingw/releases/latest)
-   (versão *msvcrt-x86_64*(64-bit) ou *msvcrt-i686*(32-bit))
+   (versão *msvcrt-x86_64* (64-bit) ou *msvcrt-i686* (32-bit));
 2. Descompactar o *.zip* e adicionar o caminho `llvm-mingw...\bin` à variável
-   de ambiente *PATH* do seu sistema (ou usuário)
-2. Executar `.\build.cmd run` (compila e roda o executável `compiler_win32.exe`)
+   de ambiente *PATH* do seu sistema (ou usuário);
+2. Executar `.\build.cmd run`
+   (compila e roda o executável `compiler_win32.exe`).
