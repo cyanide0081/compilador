@@ -1320,18 +1320,16 @@ LRESULT CALLBACK Win32WindowCallback(
                     FILE_ATTRIBUTE_NORMAL,
                     NULL
                 );
-                if (file == INVALID_HANDLE_VALUE) {
-                    Win32ErrorDialog(L"Erro ao abrir arquivo");
-                    break;
-                }
 
-                LARGE_INTEGER file_size;
-                GetFileSizeEx(file, &file_size);
+                LARGE_INTEGER file_size = {0};
+                if (file != INVALID_HANDLE_VALUE) {
+                    GetFileSizeEx(file, &file_size);
+                }
 
                 const char prefix[] = "Integrantes:\r\n";
                 isize prefix_len = CY_STATIC_STR_LEN(prefix);
                 isize members_cap = prefix_len + file_size.QuadPart;
-                CyString members  = cy_string_create_reserve(
+                CyString members = cy_string_create_reserve(
                     cy_heap_allocator(), members_cap
                 );
                 if (members == NULL) {
@@ -1339,13 +1337,11 @@ LRESULT CALLBACK Win32WindowCallback(
                     break;
                 }
 
+                members = cy_string_append_c(members, prefix);
                 isize bytes_read = 0;
-                b32 read = ReadFile(
-                    file,
-                    members + prefix_len,
-                    members_cap - prefix_len,
-                    (LPDWORD)&bytes_read,
-                    NULL
+                ReadFile(
+                    file, members + prefix_len, members_cap - prefix_len,
+                    (LPDWORD)&bytes_read, NULL
                 );
                 ASSERT(bytes_read == (isize)file_size.QuadPart);
                 CloseHandle(file);
