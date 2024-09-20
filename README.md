@@ -65,7 +65,8 @@ As palavras reservadas da linguagem são: *main*, *end*, *if*, *elif*, *else*,
 ## Como compilar o compilador
 
 1. Baixar [LLVM-MinGW](https://github.com/mstorsjo/llvm-mingw/releases/latest)
-   (versão *msvcrt-x86_64*(64-bit) ou *msvcrt-i686*(32-bit))
+   (versão *msvcrt-x86_64* (64-bit) ou *msvcrt-i686* (32-bit));
 2. Descompactar o *.zip* e adicionar o caminho `llvm-mingw...\bin` à variável
-   de ambiente *PATH* do seu sistema (ou usuário)
-2. Executar `.\build.cmd run` (compila e roda o executável `compiler_win32.exe`)
+   de ambiente *PATH* do seu sistema (ou usuário);
+2. Executar `.\build.cmd run`
+   (compila e roda o executável `compiler_win32.exe`).
