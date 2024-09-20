@@ -92,10 +92,10 @@ typedef struct {
     const u8 *end;
     const u8 *cur;
     const u8 *next;
-    
+
     Rune cur_rune;
     TokenPos pos;
-    
+
     TokenizerError err;
     const u8 *err_desc;
     Token bad_tok;
@@ -316,7 +316,7 @@ static inline void tokenizer_parse_numerical_constant(
         t->next < t->end && rune_is_digit(*t->next);
     if (is_float) {
         token_out->kind = C_TOKEN_FLOAT;
-        
+
         tokenizer_advance_to_next_rune(t);
         t->cur_rune = t->cur_rune;
 
@@ -361,7 +361,7 @@ static inline void tokenizer_parse_string_literal(
                 bad_tok.str.len += 1;
             }
 
-            // TODO(cya): indicate col pos of bad tok when we switch to arenas 
+            // TODO(cya): indicate col pos of bad tok when we switch to arenas
             tokenizer_error(
                 t, &bad_tok, T_ERR_INVALID_STRING,
                 "especificador de formato inválido (%*)"
@@ -382,7 +382,7 @@ static inline void tokenizer_parse_string_literal(
         );
         return;
     }
-    
+
     tokenizer_advance_to_next_rune(t);
     token_out->kind = C_TOKEN_STRING;
 }
@@ -411,14 +411,15 @@ static inline void tokenizer_parse_comment(Tokenizer *t, Token *token_out)
         );
         return;
     }
-    
+
     const u8 *end = t->next;
     tokenizer_advance_to_next_rune(t);
     tokenizer_advance_to_next_rune(t);
-    
+
+    // NOTE(cya): should detect CR/LF/CRLF line endings correctly
     b32 malformed =
-        *(end - 2) != '\n' || *(end - 3) != '\r' ||
-        *(start + 2) != '\r' || *(start + 3) != '\n';
+        (*(end - 2) != '\n' && *(end - 2) != '\r') ||
+        (*(start + 2) != '\r' && *(start + 2) != '\n');
     if (malformed) {
         tokenizer_error(t, token_out, T_ERR_INVALID_COMMENT, "mal formatado");
         return;
@@ -652,7 +653,7 @@ static CyString append_tokens_fmt(CyString str, const TokenList *l)
     );
     for (isize i = 0; i < l->len; i++) {
         Token *t = &l->arr[i];
-        
+
         char line_buf[LINE_NUM_MAX_DIGITS + 1];
         isize line_buf_cap = CY_STATIC_STR_LEN(line_buf);
         isize line_buf_len = int_to_utf8(
@@ -696,7 +697,7 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
         msg = cy_string_append_view(msg, t->bad_tok.str);
         msg = cy_string_append_rune(msg, ' ');
     }
-    
+
     const char *desc = NULL;
     switch (err) {
     case T_ERR_INVALID_SYMBOL: {
@@ -718,7 +719,7 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
         desc = "(fatal) erro não reconhecido ao tokenizar código";
     } break;
     }
-    
+
     msg = cy_string_append_c(msg, desc);
     if (t->err_desc != NULL) {
         msg = cy_string_append_c(msg, " (");
