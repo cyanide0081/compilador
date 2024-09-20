@@ -14,7 +14,7 @@ set "FLAGS=%FLAGS% -municode -Wl,-subsystem,windows"
 if "%~1" == "debug" (
 	set "MFLAGS=-g -gcodeview -Wl,--pdb="
 ) else (
-	set "MFLAGS=-DNDEBUG -O2"
+	set "MFLAGS=-DNDEBUG -O3"
 )
 
 @echo on

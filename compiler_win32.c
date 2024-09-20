@@ -131,6 +131,65 @@ static inline void Win32FatalErrorDialog(const u16 *msg)
 #define WIN32_FATAL_MEM_ERROR_DIALOG() \
     Win32FatalErrorDialog(L"Erro ao alocar memória")
 
+static inline u16 *Win32UTF8toUTF16(const char *str, isize len, isize *len_out)
+{
+    isize len_utf16 = MultiByteToWideChar(
+        CP_UTF8, 0,
+        str, len,
+        NULL, 0
+    );
+    isize size_utf16 = (len_utf16 + 1) * sizeof(u16);
+    u16 *str_utf16 = page_alloc(size_utf16);
+    if (str_utf16 == NULL) {
+        return NULL;
+    }
+
+    isize res = MultiByteToWideChar(
+        CP_UTF8, 0,
+        str, len + 1,
+        str_utf16, len_utf16 + 1
+    );
+    if (res == 0) {
+        Win32ErrorDialog(L"Erro ao converter texto para UTF-16");
+        *len_out = 0;
+        return NULL;
+    }
+
+    str_utf16[len_utf16] = '\0';
+    *len_out = len_utf16;
+    return str_utf16;
+}
+
+static inline CyString Win32UTF16toUTF8(const u16 *str, isize len)
+{
+    isize len_utf8 = WideCharToMultiByte(
+        CP_UTF8, 0,
+        str, len,
+        NULL, 0,
+        NULL, NULL
+    );
+    CyString str_utf8 = cy_string_create_reserve(cy_heap_allocator(), len_utf8);
+    if (str_utf8 == NULL) {
+        return NULL;
+    }
+
+    isize res = WideCharToMultiByte(
+        CP_UTF8, 0,
+        str, len + 1,
+        str_utf8, len_utf8 + 1,
+        NULL, NULL
+    );
+    if (res == 0) {
+        Win32ErrorDialog(L"Erro ao converter texto para UTF-8");
+        cy_string_free(str_utf8);
+        return NULL;
+    }
+
+    cy__string_set_len(str_utf8, len_utf8);
+    str_utf8[len_utf8] = '\0';
+    return str_utf8;
+}
+
 static TextBuf text_buf_alloc(isize chars)
 {
     isize size = round_up((chars + 1) * sizeof(u16), PAGE_SIZE);
@@ -952,7 +1011,7 @@ UINT_PTR Win32DialogHook(
     return FALSE;
 }
 
-static CyString cy_string_from_text_editor(void)
+static inline CyString cy_string_from_text_editor(void)
 {
     isize new_len = GetWindowTextLengthW(g_controls.text_editor);
     text_buf_resize(&g_bufs.editor, new_len);
@@ -963,30 +1022,7 @@ static CyString cy_string_from_text_editor(void)
     );
     g_bufs.editor.len = new_len;
 
-    isize str_len = WideCharToMultiByte(
-        CP_UTF8, 0,
-        g_bufs.editor.data, g_bufs.editor.len,
-        NULL, 0,
-        NULL, NULL
-    );
-    CyString str = cy_string_create_reserve(cy_heap_allocator(), str_len);
-    if (str == NULL) {
-        return NULL;
-    }
-
-    isize res = WideCharToMultiByte(
-        CP_UTF8, 0,
-        g_bufs.editor.data, g_bufs.editor.len + 1,
-        str, str_len + 1,
-        NULL, NULL
-    );
-    if (res == 0) {
-        return NULL;
-    }
-
-    cy__string_set_len(str, str_len);
-    str[str_len] = '\0';
-    return str;
+    return Win32UTF16toUTF8(g_bufs.editor.data, g_bufs.editor.len);
 }
 
 #define MOUSEMOVE_TIMEOUT_MS (1000 / 200)
@@ -1138,8 +1174,8 @@ LRESULT CALLBACK Win32WindowCallback(
             GetFileSizeEx(file, &file_size);
 
             u16 *utf16_buf = NULL;
-            isize utf8_buf_size = file_size.QuadPart + 1;
-            char *utf8_buf = page_alloc(utf8_buf_size);
+            isize utf8_len = file_size.QuadPart;
+            char *utf8_buf = page_alloc(utf8_len + 1);
             if (utf8_buf == NULL) {
                 Win32ErrorDialog(L"Erro ao alocar memória temporária");
             }
@@ -1160,22 +1196,8 @@ LRESULT CALLBACK Win32WindowCallback(
                 goto fopen_cleanup;
             }
 
-            isize utf16_len = MultiByteToWideChar(
-                CP_UTF8, 0,
-                utf8_buf, utf8_buf_size - 1,
-                NULL, 0
-            );
-            isize utf16_size = (utf16_len + 1) * sizeof(u16);
-            utf16_buf = page_alloc(utf16_size);
-            isize res = MultiByteToWideChar(
-                CP_UTF8, 0,
-                utf8_buf, utf8_buf_size,
-                utf16_buf, utf16_len + 1
-            );
-            if (res == 0) {
-                Win32ErrorDialog(L"Erro ao converter bytes para UTF-16");
-                goto fopen_cleanup;
-            }
+            isize utf16_len;
+            utf16_buf = Win32UTF8toUTF16(utf8_buf, utf8_len, &utf16_len);
 
             text_buf_convert_newlines(&g_bufs.editor, utf16_buf, utf16_len);
 
@@ -1284,24 +1306,11 @@ LRESULT CALLBACK Win32WindowCallback(
 
             String src_view = cy_string_view_create(src_code);
             output = compile(src_view);
-            isize output_utf16_len = MultiByteToWideChar(
-                CP_UTF8, 0,
-                output, cy_string_len(output),
-                NULL, 0
-            );
-            isize output_utf16_size = (cy_string_len(output) + 1) * sizeof(u16);
-            output_utf16 = page_alloc(output_utf16_size);
-            isize res = MultiByteToWideChar(
-                CP_UTF8, 0,
-                output, cy_string_len(output) + 1,
-                output_utf16, output_utf16_len + 1
-            );
-            if (res == 0) {
-                Win32ErrorDialog(L"Erro ao converter bytes para UTF-16");
-                goto compile_cleanup;
-            }
 
-            output_utf16[output_utf16_len] = '\0';
+            isize output_utf16_len;
+            output_utf16 = Win32UTF8toUTF16(
+                output, cy_string_len(output), &output_utf16_len
+            );
             Win32SetLogAreaText(output_utf16);
 
         compile_cleanup:
@@ -1321,14 +1330,18 @@ LRESULT CALLBACK Win32WindowCallback(
                     NULL
                 );
 
+                const char prefix[] = "Integrantes:\r\n";
+                isize prefix_len = CY_STATIC_STR_LEN(prefix);
+                const char err_suffix[] = "(integrantes.txt não encontrado)";
+                isize err_suffix_len = 4 + CY_STATIC_STR_LEN(err_suffix);
+                isize members_cap = prefix_len + err_suffix_len;
+
                 LARGE_INTEGER file_size = {0};
                 if (file != INVALID_HANDLE_VALUE) {
                     GetFileSizeEx(file, &file_size);
+                    members_cap = prefix_len + file_size.QuadPart;
                 }
 
-                const char prefix[] = "Integrantes:\r\n";
-                isize prefix_len = CY_STATIC_STR_LEN(prefix);
-                isize members_cap = prefix_len + file_size.QuadPart;
                 CyString members = cy_string_create_reserve(
                     cy_heap_allocator(), members_cap
                 );
@@ -1338,32 +1351,23 @@ LRESULT CALLBACK Win32WindowCallback(
                 }
 
                 members = cy_string_append_c(members, prefix);
-                isize bytes_read = 0;
-                ReadFile(
-                    file, members + prefix_len, members_cap - prefix_len,
-                    (LPDWORD)&bytes_read, NULL
-                );
-                ASSERT(bytes_read == (isize)file_size.QuadPart);
-                CloseHandle(file);
-
-                isize members_utf16_len = MultiByteToWideChar(
-                    CP_UTF8, 0,
-                    members, members_cap + 1,
-                    NULL, 0
-                );
-                isize members_utf16_size =
-                    (members_utf16_len + 1) * sizeof(u16);
-                u16 *members_utf16 = page_alloc(members_utf16_size);
-                isize res = MultiByteToWideChar(
-                    CP_UTF8, 0,
-                    members, members_cap + 1,
-                    members_utf16, members_utf16_len + 1
-                );
-                if (res == 0) {
-                    Win32ErrorDialog(L"Erro ao converter bytes para UTF-16");
-                    break;
+                if (file != INVALID_HANDLE_VALUE) {
+                    isize bytes_read = 0;
+                    ReadFile(
+                        file, members + prefix_len, members_cap - prefix_len,
+                        (LPDWORD)&bytes_read, NULL
+                    );
+                    ASSERT(bytes_read == (isize)file_size.QuadPart);
+                    CloseHandle(file);
+                } else {
+                    members = cy_string_append_len(members, "    ", 4);
+                    members = cy_string_append_c(members, err_suffix);
                 }
 
+                isize members_utf16_len;
+                u16 *members_utf16 = Win32UTF8toUTF16(
+                    members, members_cap, &members_utf16_len
+                );
                 g_state.members = members_utf16;
             }
 
@@ -1411,7 +1415,7 @@ int WINAPI wWinMain(
         .hInstance = instance,
         .lpszClassName = CLASS_NAME,
         .hbrBackground = (HBRUSH)CTLCOLOR_SCROLLBAR,
-        .hIcon = LoadIconW(NULL, IDI_INFORMATION),
+        .hIcon = LoadIconW(NULL, IDI_APPLICATION),
         .hCursor = LoadCursorW(NULL, IDC_ARROW),
     };
     RegisterClassW(&window_class);
@@ -1431,7 +1435,7 @@ int WINAPI wWinMain(
     HWND window = CreateWindowExW(
         0,
         CLASS_NAME,
-        L"o compilador",
+        L"compilador 2024-2",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         CW_USEDEFAULT, CW_USEDEFAULT,
         width,
