@@ -51,16 +51,20 @@ static inline isize round_up(isize size, isize target)
 
 static inline isize utf16_length(const u16* buf)
 {
+    if (buf == NULL) {
+        return 0;
+    }
+
     isize len = 0;
-    while (*buf++ != L'\0') len += 1;
+    while (*buf++ != '\0') len += 1;
 
     return len;
 }
 
 static inline u16 *utf16_concat(
-	u16 *dst,
-	const u16 *src,
-	isize len
+    u16 *dst,
+    const u16 *src,
+    isize len
 ) {
     isize size = len * sizeof(*dst);
     CopyMemory(dst, src, size);
@@ -729,7 +733,7 @@ static void Win32UpdateLineNumbers(void)
         g_controls.text_editor, EM_GETFIRSTVISIBLELINE, 0, 0
     );
 
-    RECT text_rect;
+    RECT text_rect = {0};
     SendMessageW(g_controls.text_editor, EM_GETRECT, 0, (LPARAM)&text_rect);
     LPARAM bottom = MAKELPARAM(0, text_rect.bottom - 1);
     LRESULT char_from_pos = SendMessageW(

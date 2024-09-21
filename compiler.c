@@ -295,8 +295,11 @@ static inline TokenKind token_kind_from_string(String str)
 static inline void tokenizer_error(
     Tokenizer *t, Token *bad_tok, TokenizerError err, const char *err_desc
 ) {
+    if (bad_tok != NULL) {
+        t->bad_tok = *bad_tok;
+    }
+
     t->err = err;
-    t->bad_tok = *bad_tok;
     t->err_desc = (const u8*)err_desc;
 }
 
