@@ -711,7 +711,8 @@ static CyString append_token_info(
     CyString str, String line,
     String kind, String token
 ) {
-    CyString new_line = cy_string_create_reserve(cy_heap_allocator(), 0x20);
+    CyAllocator a = CY_STRING_HEADER(str)->alloc;
+    CyString new_line = cy_string_create_reserve(a, 0x20);
     new_line = cy_string_append_view(new_line, line);
     new_line = cy_string_pad_right(new_line, 10, ' ');
 
@@ -759,13 +760,13 @@ static CyString append_tokens_fmt(CyString str, const TokenList *l)
     return str;
 }
 
-static CyString tokenizer_create_error_msg(const Tokenizer *t)
+static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 {
     if (t->err == T_ERR_OUT_OF_MEMORY) {
         return NULL; // NOTE(cya): since we're out of memory
     }
 
-    CyString msg = cy_string_create_reserve(cy_heap_allocator(), 0x40);
+    CyString msg = cy_string_create_reserve(a, 0x40);
     msg = cy_string_append_c(msg, "linha ");
 
     char line_num[LINE_NUM_MAX_DIGITS + 1];
@@ -818,15 +819,20 @@ static CyString tokenizer_create_error_msg(const Tokenizer *t)
 
 CyString compile(String src_code)
 {
+    CyArena tokenizer_arena = cy_arena_init(cy_heap_allocator(), 0x4000);
+    CyAllocator temp_allocator = cy_arena_allocator(&tokenizer_arena);
+    CyAllocator perm_allocator = cy_heap_allocator();
+
     Tokenizer t = tokenizer_init(src_code);
-    TokenList token_list = tokenize(cy_heap_allocator(), &t, true);
+    TokenList token_list = tokenize(temp_allocator, &t, true);
     if (t.err != T_ERR_NONE) {
-        return tokenizer_create_error_msg(&t);
+        cy_free_all(temp_allocator);
+        return tokenizer_create_error_msg(perm_allocator, &t);
     }
 
-    CyString output = cy_string_create_reserve(cy_heap_allocator(), 0x1000);
+    CyString output = cy_string_create_reserve(perm_allocator, 0x1000);
     output = append_tokens_fmt(output, &token_list);
-    cy_free(cy_heap_allocator(), token_list.arr);
 
+    cy_arena_deinit(&tokenizer_arena);
     return output;
 }

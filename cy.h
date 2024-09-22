@@ -804,13 +804,12 @@ CY_DEF inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
     return arena;
 }
 
-CY_DEF inline void arena_deinit(CyArena *arena)
+CY_DEF inline void cy_arena_deinit(CyArena *arena)
 {
-    CyArenaNode *cur_node = arena->state.first_node, *next = cur_node->next;
-    while (next != NULL) {
-        cur_node = next;
-        next = next->next;
+    CyArenaNode *cur_node = arena->state.first_node;
+    while (cur_node != NULL) {
         cy_free(arena->backing, cur_node);
+        cur_node = cur_node->next;
     }
 }
 
@@ -854,7 +853,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
         ptr = aligned_end;
     } break;
     case CY_ALLOCATION_FREE: {
-        CY_ASSERT_MSG(false, "arenas don't support individual frees");
+        // NOTE(cya): pass-through here allows for modular allocator params
     } break;
     case CY_ALLOCATION_FREE_ALL: {
         CyArenaNode *cur_node = arena->state.first_node, *next = cur_node->next;
