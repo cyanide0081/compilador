@@ -54,17 +54,21 @@ TOKEN_KIND(C_TOKEN__KEYWORD_BEGIN, ""), \
 TOKEN_KIND(C_TOKEN__KEYWORD_END, ""), \
     TOKEN_KIND(C_TOKEN_COUNT, "")
 
+#define KEYWORD_COUNT (C_TOKEN__KEYWORD_END - C_TOKEN__KEYWORD_BEGIN - 1)
+
 typedef enum {
 #define TOKEN_KIND(e, s) e
     TOKEN_KINDS
 #undef TOKEN_KIND
 } TokenKind;
 
-const String token_strings[] = {
+const String g_token_strings[] = {
 #define TOKEN_KIND(e, s) {(const u8*)s, CY_STATIC_STR_LEN(s)}
     TOKEN_KINDS
 #undef TOKEN_KIND
 };
+
+static isize g_keyword_map_arr[KEYWORD_COUNT * 3];
 
 typedef struct {
     i32 line;
@@ -104,6 +108,68 @@ typedef struct {
 typedef struct {
     u8 lo, hi;
 } Utf8AcceptRange;
+
+typedef isize (*HashFunc)(String);
+
+typedef struct {
+    isize *data;
+    isize len;
+    HashFunc hash_func;
+} KeywordMap;
+
+static KeywordMap g_keyword_map;
+
+static KeywordMap keyword_map_init(
+    isize *arr, isize len, HashFunc hash_func
+) {
+    return (KeywordMap){
+        .data = (void*)arr,
+        .len = len,
+        .hash_func = hash_func,
+    };
+}
+
+void keyword_map_insert(KeywordMap *map, String key, isize val)
+{
+    if (map != NULL) {
+        isize idx = map->hash_func(key);
+        if (idx == -1)  {
+            return;
+        }
+
+        idx %= map->len;
+        CY_ASSERT_MSG(
+            map->data[idx] == 0,
+            "hash collision detected (idx: %td, cur val: %td, new val: %td)",
+            idx, map->data[idx], val
+        );
+
+        map->data[idx] = val;
+    }
+}
+
+isize keyword_hash_func(String key)
+{
+    isize len = key.len;
+    if (len < 2) {
+        return -1;
+    }
+
+    // NOTE(cya): uniqueness <- 1st char, last char and length
+    u16 l = (u16)key.text[0] << 8, r = key.text[len - 2];
+    return (isize)((l | r) * key.len);
+}
+
+static isize keyword_map_lookup(KeywordMap *map, String key)
+{
+    isize idx = map->hash_func(key);
+    if (idx == -1) {
+        return -1;
+    }
+
+    idx %= map->len;
+    return map->data[idx];
+}
 
 static const Utf8AcceptRange g_utf8_accept_ranges[] = {
     {0x80, 0xBF},
@@ -162,6 +228,19 @@ static void tokenizer_advance_to_next_rune(Tokenizer *t)
 
 static inline Tokenizer tokenizer_init(String src)
 {
+    if (g_keyword_map.data == NULL) {
+        g_keyword_map = keyword_map_init(
+            g_keyword_map_arr, CY_STATIC_ARR_LEN(g_keyword_map_arr),
+            keyword_hash_func
+        );
+
+        isize offset = C_TOKEN__KEYWORD_BEGIN + 1;
+        for (isize i = 0; i < KEYWORD_COUNT; i++) {
+            isize idx = offset + i;
+            keyword_map_insert(&g_keyword_map, g_token_strings[idx], idx);
+        }
+    }
+
     const u8 *start = (const u8*)src.text;
     const u8 *end = start + src.len;
     Tokenizer t = {
@@ -243,14 +322,18 @@ static inline b32 token_is_ident(String tok)
 
 static inline b32 token_is_keyword(String tok, i32 *kind_out)
 {
-    for (isize i = C_TOKEN__KEYWORD_BEGIN + 1; i < C_TOKEN__KEYWORD_END; i++) {
-        if (cy_string_view_are_equal(tok, token_strings[i])) {
-            *kind_out = i;
-            return true;
-        }
+    isize idx = keyword_map_lookup(&g_keyword_map, tok);
+    if (idx == -1) {
+        return false;
     }
 
-    return false;
+    String keyword = g_token_strings[idx];
+    if (*tok.text != *keyword.text || !cy_string_view_are_equal(tok, keyword)) {
+        return false;
+    }
+
+    *kind_out = idx;
+    return true;
 }
 
 static inline b32 is_whitespace(Rune r)
@@ -271,20 +354,20 @@ static inline void tokenizer_skip_whitespace(Tokenizer *t)
 static inline String string_from_token_kind(TokenKind kind)
 {
     if (kind < 0 || kind >= C_TOKEN_COUNT) {
-        return token_strings[C_TOKEN_INVALID];
+        return g_token_strings[C_TOKEN_INVALID];
     } else if (kind > C_TOKEN__OPERATOR_BEGIN && kind < C_TOKEN__OPERATOR_END) {
         return cy_string_view_create_c("símbolo especial");
     } else if (kind > C_TOKEN__KEYWORD_BEGIN && kind < C_TOKEN__KEYWORD_END) {
         return cy_string_view_create_c("palavra reservada");
     }
 
-    return token_strings[kind];
+    return g_token_strings[kind];
 }
 
 static inline TokenKind token_kind_from_string(String str)
 {
     for (isize i = 0; i < C_TOKEN_COUNT; i++) {
-        if (cy_string_view_are_equal(str, token_strings[i])) {
+        if (cy_string_view_are_equal(str, g_token_strings[i])) {
             return i;
         }
     }

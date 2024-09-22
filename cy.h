@@ -471,6 +471,7 @@ CY_DEF inline char *cy_alloc_string_len(
 #define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
 
 #define CY_STATIC_STR_LEN(str) ((sizeof(str) - 1) / sizeof(*(str)))
+#define CY_STATIC_ARR_LEN(arr) ((sizeof(arr)) / sizeof(*(arr)))
 
 CY_DEF inline isize cy_str_len(const char *str)
 {
@@ -1354,6 +1355,18 @@ CY_DEF CyString cy_string_append_rune(CyString str, Rune r)
     return cy_string_append_len(str, (const char*)&r, width);
 }
 
+CY_DEF CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+
+    char buf[0x1000] = {0};
+    isize len = vsnprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va) - 1;
+
+    va_end(va);
+    return cy_string_append_len(str, buf, len);
+}
+
 CY_DEF CyString cy_string_pad_right(CyString str, isize width, Rune r)
 {
     // TODO(cya): calculate width with utf8_width proc (to be implemented)
@@ -1445,7 +1458,7 @@ CY_DEF CyStringView cy_string_view_create_len(const char *str, isize len)
     };
 }
 
-CY_DEF CyStringView cy_string_view_create(const CyString str)
+CY_DEF CyStringView cy_string_view_create(CyString str)
 {
     return cy_string_view_create_len(str, cy_string_len(str));
 }
@@ -1466,7 +1479,7 @@ CY_DEF CyStringView cy_string_view_substring(
     return cy_string_view_create_len((const char*)str.text + lo, hi - lo);
 }
 
-CY_DEF inline b32 cy_string_view_are_equal(const CyStringView a, const CyStringView b)
+CY_DEF inline b32 cy_string_view_are_equal(CyStringView a, CyStringView b)
 {
     return a.len == b.len &&
         cy_mem_compare((void*)a.text, (void*)b.text, a.len) == 0;
@@ -1505,4 +1518,4 @@ CY_DEF b32 cy_string_view_contains(CyStringView str, const char *char_set)
  * more CyString procedures (trim, etc.)
  */
 
-#endif /* _CY_H */
+#endif // _CY_H
