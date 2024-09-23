@@ -516,7 +516,6 @@ static inline void tokenizer_parse_comment(Tokenizer *t, Token *token_out)
 
 static Token tokenizer_get_token(Tokenizer *t)
 {
-    // TODO(cya): move some parsing cases into their own procedures
     tokenizer_skip_whitespace(t);
 
     TokenPos cur_pos = t->pos;
@@ -637,7 +636,6 @@ typedef struct {
 
 static TokenList tokenize(CyAllocator a, Tokenizer *t, b32 ignore_comments)
 {
-    // TODO(cya): pick more specialized allocators
     TokenList list = {
         .cap = C_TOKEN_LIST_INIT_CAP,
     };
@@ -767,22 +765,13 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     }
 
     CyString msg = cy_string_create_reserve(a, 0x40);
-    msg = cy_string_append_c(msg, "linha ");
-
-    char line_num[LINE_NUM_MAX_DIGITS + 1];
-    isize line_num_cap = CY_STATIC_STR_LEN(line_num);
-    isize line_num_len = int_to_utf8(
-        t->bad_tok.pos.line, line_num_cap, line_num, line_num_cap
-    );
-    msg = cy_string_append_view(
-        msg, cy_string_view_create_len(line_num, line_num_len)
-    );
-    msg = cy_string_append_c(msg, ": ");
+    msg = cy_string_append_fmt(msg, "linha %td: ", t->bad_tok.pos.line);
 
     TokenizerError err = t->err;
     if (err != T_ERR_INVALID_STRING && err != T_ERR_INVALID_COMMENT) {
-        msg = cy_string_append_view(msg, t->bad_tok.str);
-        msg = cy_string_append_rune(msg, ' ');
+        msg = cy_string_append_fmt(
+            msg, "%.*s ", (int)t->bad_tok.str.len, t->bad_tok.str.text
+        );
     }
 
     const char *desc = NULL;
@@ -809,9 +798,7 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 
     msg = cy_string_append_c(msg, desc);
     if (t->err_desc != NULL) {
-        msg = cy_string_append_c(msg, " (");
-        msg = cy_string_append_c(msg, (const char*)t->err_desc);
-        msg = cy_string_append_rune(msg, ')');
+        msg = cy_string_append_fmt(msg, " (%s)", t->err_desc);
     }
 
     return msg;

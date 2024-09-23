@@ -1360,7 +1360,7 @@ CY_DEF CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
     va_start(va, fmt);
 
     char buf[0x1000] = {0};
-    isize len = vsnprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va) - 1;
+    isize len = vsnprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
 
     va_end(va);
     return cy_string_append_len(str, buf, len);
