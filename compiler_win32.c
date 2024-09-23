@@ -2,6 +2,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <uxtheme.h>
+#include <richedit.h>
 
 #include "compiler.c"
 
@@ -489,12 +490,14 @@ static void Win32SetupControls(HWND parent)
         NULL
     );
 
+    LoadLibraryW(L"Msftedit.dll");
     isize editor_height = g_client.height - TOOLBAR_HEIGHT -
         STATUSBAR_HEIGHT - LOG_AREA_HEIGHT - SPLITTER_HEIGHT;
-    g_controls.text_editor = CreateWindowW(
-        WC_EDITW,
+    g_controls.text_editor = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        MSFTEDIT_CLASS,
         L"#",
-        WS_TEXT_AREA | ES_WANTRETURN | WS_CLIPSIBLINGS,
+        WS_TEXT_AREA | ES_WANTRETURN | WS_CLIPSIBLINGS | ES_DISABLENOSCROLL,
         0, 0, 0, editor_height,
         parent,
         NULL,
@@ -508,11 +511,13 @@ static void Win32SetupControls(HWND parent)
 
     const isize EDIT_CHAR_LEN = 4;
     const isize tab_width = 4 * EDIT_CHAR_LEN;
-    SendMessageW(g_controls.text_editor, EM_SETTABSTOPS, 1, (LPARAM)&tab_width);
+    // SendMessageW(g_controls.text_editor, EM_SETTABSTOPS, 1, (LPARAM)&tab_width);
 
     {
-        int y =
-            HIWORD(SendMessageW(g_controls.text_editor, EM_POSFROMCHAR, 0, 0));
+        POINTL point = (POINTL){0};
+        int y = HIWORD(SendMessageW(
+            g_controls.text_editor, EM_POSFROMCHAR, (WPARAM)&point, 0
+        ));
         SetWindowPos(
             g_controls.line_numbers, HWND_TOP,
             0, y + TOOLBAR_HEIGHT, 0, 0,
@@ -733,13 +738,10 @@ static void Win32UpdateLineNumbers(void)
         g_controls.text_editor, EM_GETFIRSTVISIBLELINE, 0, 0
     );
 
-    RECT text_rect = {0};
-    SendMessageW(g_controls.text_editor, EM_GETRECT, 0, (LPARAM)&text_rect);
-    LPARAM bottom = MAKELPARAM(0, text_rect.bottom - 1);
-    LRESULT char_from_pos = SendMessageW(
-        g_controls.text_editor, EM_CHARFROMPOS, 0, bottom
-    );
-    isize last_visible_line = 1 + HIWORD(char_from_pos);
+    isize last_char_idx = GetWindowTextLengthW(g_controls.text_editor);
+    isize last_visible_line = SendMessageW(
+        g_controls.text_editor, EM_EXLINEFROMCHAR, 0, last_char_idx
+    ) + 1;
     b32 has_changed = !(first_visible_line == g_state.first_visible_line &&
         last_visible_line == g_state.last_visible_line);
     if (!has_changed) {
@@ -958,6 +960,16 @@ LRESULT CALLBACK Win32TextEditorCallback(
 
     clip_cleanup:
         CloseClipboard();
+    } break;
+    case WM_MOUSEWHEEL: {
+        i16 wheel_delta = GET_WHEEL_DELTA_WPARAM(w_param);
+        if (wheel_delta > 0) {
+            SendMessageW(control, WM_VSCROLL, SB_LINEUP, 0);
+        } else if (wheel_delta < 0) {
+            SendMessageW(control, WM_VSCROLL, SB_LINEDOWN, 0);
+        }
+
+        return true;
     } break;
     }
 
@@ -1387,8 +1399,8 @@ LRESULT CALLBACK Win32WindowCallback(
                     isize new_limit =
                         2 * GetWindowTextLengthW(g_controls.text_editor);
                     SendMessageW(
-                        g_controls.text_editor, EM_LIMITTEXT,
-                        new_limit, 0
+                        g_controls.text_editor, EM_EXLIMITTEXT,
+                        0, new_limit
                     );
                 }
             } break;
@@ -1408,6 +1420,8 @@ int WINAPI wWinMain(
     int cmd_show
 ) {
     (void)instance, (void)prev_instance, (void)cmd_line, (void)cmd_show;
+
+    InitCommonControls();
 
     g_bufs.lines = text_buf_alloc((MAX_LINE_DIGITS + 2) * 20);
     g_bufs.editor = text_buf_alloc(0x1000);
