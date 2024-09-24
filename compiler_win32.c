@@ -490,14 +490,14 @@ static void Win32SetupControls(HWND parent)
         NULL
     );
 
-    LoadLibraryW(L"Msftedit.dll");
+    LoadLibraryW(L"Riched32.dll");
     isize editor_height = g_client.height - TOOLBAR_HEIGHT -
         STATUSBAR_HEIGHT - LOG_AREA_HEIGHT - SPLITTER_HEIGHT;
     g_controls.text_editor = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        MSFTEDIT_CLASS,
+        0,
+        RICHEDIT_CLASS,
         L"#",
-        WS_TEXT_AREA | ES_WANTRETURN | WS_CLIPSIBLINGS | ES_DISABLENOSCROLL,
+        WS_TEXT_AREA | ES_WANTRETURN | WS_CLIPSIBLINGS | ES_DISABLENOSCROLL | WS_HSCROLL,
         0, 0, 0, editor_height,
         parent,
         NULL,
@@ -515,12 +515,10 @@ static void Win32SetupControls(HWND parent)
 
     {
         POINTL point = (POINTL){0};
-        int y = HIWORD(SendMessageW(
-            g_controls.text_editor, EM_POSFROMCHAR, (WPARAM)&point, 0
-        ));
+        SendMessageW(g_controls.text_editor, EM_POSFROMCHAR, (WPARAM)&point, 0);
         SetWindowPos(
             g_controls.line_numbers, HWND_TOP,
-            0, y + TOOLBAR_HEIGHT, 0, 0,
+            0, TOOLBAR_HEIGHT + point.y + 2, 0, 0,
             SWP_NOSIZE
         );
         SetWindowTextW(g_controls.text_editor, NULL);
@@ -557,7 +555,7 @@ static void Win32SetupControls(HWND parent)
         .lfCharSet = DEFAULT_CHARSET,
         .lfOutPrecision = OUT_TT_PRECIS,
         .lfClipPrecision = CLIP_DEFAULT_PRECIS,
-        .lfQuality = ANTIALIASED_QUALITY,
+        .lfQuality = NONANTIALIASED_QUALITY,
         .lfPitchAndFamily = DEFAULT_PITCH | FF_MODERN,
         .lfFaceName = L"Verdana"
     };
@@ -572,7 +570,7 @@ static void Win32SetupControls(HWND parent)
         .lfCharSet = DEFAULT_CHARSET,
         .lfOutPrecision = OUT_TT_PRECIS,
         .lfClipPrecision = CLIP_DEFAULT_PRECIS,
-        .lfQuality = ANTIALIASED_QUALITY,
+        .lfQuality = NONANTIALIASED_QUALITY,
         .lfPitchAndFamily = DEFAULT_PITCH | FF_MODERN,
         .lfFaceName = L"Courier New"
     };
