@@ -511,7 +511,7 @@ static void Win32SetupControls(HWND parent)
     SendMessageW(g_controls.text_editor, EM_SETTABSTOPS, 1, (LPARAM)&tab_width);
 
     {
-        int y =
+        int y = 2 +
             HIWORD(SendMessageW(g_controls.text_editor, EM_POSFROMCHAR, 0, 0));
         SetWindowPos(
             g_controls.line_numbers, HWND_TOP,
@@ -1046,12 +1046,22 @@ LRESULT CALLBACK Win32WindowCallback(
     case WM_CLOSE: {
         PostQuitMessage(0);
     } break;
+    case WM_CTLCOLOREDIT: {
+        if ((HWND)l_param == g_controls.text_editor) {
+            HDC dc = (HDC)w_param;
+            COLORREF edit_bk = RGB(248, 248, 248);
+            SetBkColor(dc, edit_bk);
+            SetDCBrushColor(dc, edit_bk);
+
+            return (LRESULT)GetStockObject(DC_BRUSH);
+        }
+    } break;
     case WM_CTLCOLORSTATIC: {
         if ((HWND)l_param == g_controls.line_numbers) {
             HDC dc = (HDC)w_param;
             SetBkMode(dc, TRANSPARENT);
 
-            COLORREF rgb_gray = RGB(180,180,180);
+            COLORREF rgb_gray = RGB(180, 180, 180);
             SetTextColor(dc, rgb_gray);
 
             return (LRESULT)CreateSolidBrush(GetSysColor(COLOR_MENU));

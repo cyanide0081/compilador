@@ -1,3 +1,4 @@
+#define CY_IMPLEMENTATION
 #include "cy.h"
 
 typedef CyStringView String;
