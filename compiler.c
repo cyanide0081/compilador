@@ -820,6 +820,7 @@ CyString compile(String src_code)
 
     CyString output = cy_string_create_reserve(perm_allocator, 0x1000);
     output = append_tokens_fmt(output, &token_list);
+    // output = cy_string_shrink(output);
 
     cy_arena_deinit(&tokenizer_arena);
     return output;

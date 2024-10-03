@@ -287,10 +287,10 @@ CY_DEF void *cy_resize(
 );
 // NOTE(cya): a simple resize that should fit most use cases
 CY_DEF void *cy_default_resize_align(
-    CyAllocator a, void *old_mem, isize old_size, isize new_size, isize align
+    CyAllocator a, void *ptr, isize old_size, isize new_size, isize align
 );
 CY_DEF void *cy_default_resize(
-    CyAllocator a, void *old_mem, isize old_size, isize new_size
+    CyAllocator a, void *ptr, isize old_size, isize new_size
 );
 CY_DEF void *cy_alloc_copy_align(
     CyAllocator a, const void *src, isize size, isize align
@@ -420,6 +420,7 @@ CY_DEF CyString cy_string_create_len(CyAllocator a, const char *str, isize len);
 CY_DEF CyString cy_string_create(CyAllocator a, const char *str);
 CY_DEF void cy_string_free(CyString str);
 CY_DEF CyString cy_string_reserve_space_for(CyString str, isize extra_len);
+CY_DEF CyString cy_string_shrink(CyString str);
 
 CY_DEF CyString cy_string_append_len(CyString str, const char *other, isize len);
 CY_DEF CyString cy_string_append(CyString str, CyString other);
@@ -1480,6 +1481,20 @@ CyString cy_string_reserve_space_for(CyString str, isize extra_len)
 
     str = (CyString)(header + 1);
     cy__string_set_cap(str, new_cap);
+    return str;
+}
+
+inline CyString cy_string_shrink(CyString str)
+{
+    CY_VALIDATE_PTR(str);
+
+    isize len = cy_string_len(str);
+    isize cap = cy_string_cap(str);
+    if (len < cap) {
+        str = cy_resize(CY_STRING_HEADER(str)->alloc, str, cap + 1, len + 1);
+        cy__string_set_cap(str, len);
+    }
+
     return str;
 }
 
