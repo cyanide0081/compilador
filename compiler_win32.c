@@ -639,15 +639,15 @@ static inline LineEnding line_ending_identify(const u16 *str)
 typedef struct {
     u16 *str;
     isize len;
-} StringView;
+} String16;
 
 typedef struct {
-    StringView string;
+    String16 string;
     isize cur_line_offset;
     isize crlf_len;
 } LineScanner;
 
-static LineScanner line_scanner_build(StringView *string)
+static LineScanner line_scanner_build(String16 *string)
 {
     isize offset = 0, crlf_len = 0;
     u16 *end = string->str;
@@ -672,13 +672,13 @@ static LineScanner line_scanner_build(StringView *string)
     };
 }
 
-static StringView line_scanner_get_line(LineScanner *scanner)
+static String16 line_scanner_get_line(LineScanner *scanner)
 {
     u16 *buf = scanner->string.str;
     isize offset = scanner->cur_line_offset;
     isize len = scanner->string.len;
     if (offset >= len) {
-        return (StringView){0};
+        return (String16){0};
     }
 
     u16 *line = buf + offset;
@@ -696,7 +696,7 @@ static StringView line_scanner_get_line(LineScanner *scanner)
     }
 
     scanner->cur_line_offset = offset;
-    return (StringView){
+    return (String16){
         .str = line,
         .len = line_len,
     };
@@ -706,7 +706,7 @@ static StringView line_scanner_get_line(LineScanner *scanner)
 
 static void utf16_convert_newlines(LineScanner *scanner, u16 *dst)
 {
-    StringView line = line_scanner_get_line(scanner);
+    String16 line = line_scanner_get_line(scanner);
     u16 *end = utf16_concat(dst, line.str, line.len);
     while (line.str != NULL) {
         end = utf16_concat(end, TE_NEWLINE, UTF16_STATIC_LENGTH(TE_NEWLINE));
@@ -717,7 +717,7 @@ static void utf16_convert_newlines(LineScanner *scanner, u16 *dst)
 
 static void text_buf_convert_newlines(TextBuf *dst, u16 *src, isize len)
 {
-    LineScanner scanner = line_scanner_build(&(StringView){
+    LineScanner scanner = line_scanner_build(&(String16){
         .str = src,
         .len = len,
     });
@@ -744,6 +744,11 @@ static void Win32UpdateLineNumbers(void)
         last_visible_line == g_state.last_visible_line);
     if (!has_changed) {
         return;
+    }
+
+    // NOTE(cya): since CHAR_FROM_POS is a WORD (16-bit)
+    if (first_visible_line > last_visible_line) {
+        first_visible_line %= (U16_MAX + 1);
     }
 
     g_state.first_visible_line = first_visible_line;
@@ -938,7 +943,7 @@ LRESULT CALLBACK Win32TextEditorCallback(
         u16 *copied_text = page_alloc(clip_text_size);
         utf16_concat(copied_text, clip_text, clip_text_len);
 
-        LineScanner scanner = line_scanner_build(&(StringView){
+        LineScanner scanner = line_scanner_build(&(String16){
             .str = copied_text,
             .len = clip_text_len
         });
