@@ -754,8 +754,6 @@ static CyString append_tokens_fmt(CyString str, const TokenList *l)
         str = append_token_info(str, line, token_kind, token);
     }
 
-    str = cy_string_append_c(str, "\r\n\r\nprograma tokenizado com sucesso");
-
     return str;
 }
 
@@ -807,6 +805,12 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 
 CyString compile(String src_code)
 {
+    LARGE_INTEGER perf_freq;
+    QueryPerformanceFrequency(&perf_freq);
+    LARGE_INTEGER start_counter;
+    QueryPerformanceCounter(&start_counter);
+    // CyCounter start_counter = cy_counter_query();
+
     CyArena tokenizer_arena = cy_arena_init(cy_heap_allocator(), 0x4000);
     CyAllocator temp_allocator = cy_arena_allocator(&tokenizer_arena);
     CyAllocator perm_allocator = cy_heap_allocator();
@@ -818,9 +822,22 @@ CyString compile(String src_code)
         return tokenizer_create_error_msg(perm_allocator, &t);
     }
 
-    CyString output = cy_string_create_reserve(perm_allocator, 0x1000);
+    // CyCounter end_counter = cy_counter_query();
+    // f64 elapsed_us = cy_counter_to_us(end_counter - start_counter);
+    LARGE_INTEGER end_counter;
+    QueryPerformanceCounter(&end_counter);
+    f64 elapsed_us = (end_counter.QuadPart - start_counter.QuadPart) *
+        1000000.0 / perf_freq.QuadPart;
+
+    isize init_cap = 0x100 + token_list.len * 50;
+    CyString output = cy_string_create_reserve(perm_allocator, init_cap);
     output = append_tokens_fmt(output, &token_list);
-    // output = cy_string_shrink(output);
+    output = cy_string_append_fmt(
+        output,
+        "\r\n\r\nprograma tokenizado com sucesso em %.01fμs (tokens: %td)",
+        elapsed_us, token_list.len
+    );
+    output = cy_string_shrink(output);
 
     cy_arena_deinit(&tokenizer_arena);
     return output;

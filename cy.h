@@ -226,7 +226,7 @@ CY_DEF void *cy_mem_copy(
 CY_DEF void *cy_mem_move(void *dst, const void *src, usize bytes);
 CY_DEF void *cy_mem_set(void *dst, u8 val, usize bytes);
 CY_DEF void *cy_mem_zero(void *dst, usize bytes);
-CY_DEF isize cy_mem_compare(void *a, void *b, usize bytes);
+CY_DEF isize cy_mem_compare(const void *a, const void *b, usize bytes);
 
 CY_DEF b8 cy_is_power_of_two(isize n);
 
@@ -297,6 +297,7 @@ CY_DEF void *cy_alloc_copy_align(
 );
 CY_DEF void *cy_alloc_copy(CyAllocator a, const void *src, isize size);
 CY_DEF char *cy_alloc_string_len(CyAllocator a, const char *str, isize len);
+CY_DEF char *cy_alloc_string(CyAllocator a, const char *str);
 
 // TODO(cya): figure out this sorcery
 #define CY__LO_ONES ((usize)-1 / U8_MAX)
@@ -313,7 +314,6 @@ CY_DEF char *cy_alloc_string_len(CyAllocator a, const char *str, isize len);
 
 CY_DEF isize cy_str_len(const char *str);
 CY_DEF isize cy_utf8_codepoints(const char *str);
-CY_DEF char *cy_alloc_string(CyAllocator a, const char *str);
 
 // NOTE(cya): for testing allocators and program behavior on OOM errors
 CyAllocatorProc cy_null_allocator_proc;
@@ -385,6 +385,7 @@ CY_DEF void cy_arena_deinit(CyArena *arena);
 /* TODO(cya):
  * add init_from_buffer proc to arena and other 'fixed' allocators
  * repurpose stack allocator
+ * bitmap allocator
  * pool allocator
  * buddy allocator
  * freelist allocator
@@ -503,7 +504,7 @@ void *cy_mem_zero(void *dst, usize bytes)
     return cy_mem_set(dst, 0, bytes);
 }
 
-isize cy_mem_compare(void *a, void *b, usize bytes)
+isize cy_mem_compare(const void *a, const void *b, usize bytes)
 {
     return (isize)memcmp(a, b, bytes);
 }
@@ -653,9 +654,14 @@ inline void *cy_alloc_copy(CyAllocator a, const void *src, isize size)
 
 inline char *cy_alloc_string_len(CyAllocator a, const char *str, isize len)
 {
-    char *res = cy_alloc_copy(a, str, len + 1);
+    char *res = cy_alloc_copy(a, str, len);
     res[len] = '\0';
     return res;
+}
+
+inline char *cy_alloc_string(CyAllocator a, const char *str)
+{
+    return cy_alloc_string_len(a, str, cy_str_len(str));
 }
 
 inline isize cy_str_len(const char *str)
@@ -705,11 +711,6 @@ inline isize cy_utf8_codepoints(const char *str)
     }
 
     return count;
-}
-
-inline char *cy_alloc_string(CyAllocator a, const char *str)
-{
-    return cy_alloc_string_len(a, str, cy_str_len(str));
 }
 
 CyAllocator cy_null_allocator(void)
@@ -980,8 +981,9 @@ inline void cy_arena_deinit(CyArena *arena)
 {
     CyArenaNode *cur_node = arena->state.first_node;
     while (cur_node != NULL) {
+        CyArenaNode *next = cur_node->next;
         cy_free(arena->backing, cur_node);
-        cur_node = cur_node->next;
+        cur_node = next;
     }
 }
 
@@ -1488,10 +1490,14 @@ inline CyString cy_string_shrink(CyString str)
 {
     CY_VALIDATE_PTR(str);
 
-    isize len = cy_string_len(str);
-    isize cap = cy_string_cap(str);
-    if (len < cap) {
-        str = cy_resize(CY_STRING_HEADER(str)->alloc, str, cap + 1, len + 1);
+    isize len = cy_string_len(str), cap = cy_string_cap(str);
+    isize header_size = sizeof(CyStringHeader);
+    isize size = header_size + cap + 1;
+    isize new_size = header_size + len + 1;
+    void *ptr = str - header_size;
+    if (new_size < size) {
+        ptr = cy_resize(CY_STRING_HEADER(str)->alloc, ptr, size, new_size);
+        str = (CyString)ptr + header_size;
         cy__string_set_cap(str, len);
     }
 
@@ -1654,8 +1660,7 @@ CyStringView cy_string_view_substring(
 
 inline b32 cy_string_view_are_equal(CyStringView a, CyStringView b)
 {
-    return a.len == b.len &&
-        cy_mem_compare((void*)a.text, (void*)b.text, a.len) == 0;
+    return (a.len == b.len) && (cy_mem_compare(a.text, b.text, a.len) == 0);
 }
 
 inline CyString cy_string_append_view(CyString str, CyStringView view)
