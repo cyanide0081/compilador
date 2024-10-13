@@ -3,9 +3,10 @@
 
 typedef CyStringView String;
 
+/* ---------------------------- Tokenizer ----------------------------------- */
 #define TOKEN_KINDS \
     TOKEN_KIND(C_TOKEN_INVALID, "símbolo inválido"), \
-    TOKEN_KIND(C_TOKEN_EOF, "EOF"), \
+    TOKEN_KIND(C_TOKEN_EOF, "$"), \
 \
 TOKEN_KIND(C_TOKEN__LITERAL_BEGIN, ""), \
     TOKEN_KIND(C_TOKEN_IDENT, "identificador"), \
@@ -662,9 +663,7 @@ static TokenList tokenize(CyAllocator a, Tokenizer *t, b32 ignore_comments)
         }
 
         Token new_tok = tokenizer_get_token(t);
-        if (new_tok.kind == C_TOKEN_EOF) {
-            break;
-        } else if (ignore_comments && new_tok.kind == C_TOKEN_COMMENT) {
+        if (ignore_comments && new_tok.kind == C_TOKEN_COMMENT) {
             continue;
         }
 
@@ -676,86 +675,89 @@ static TokenList tokenize(CyAllocator a, Tokenizer *t, b32 ignore_comments)
         }
 
         list.len += 1;
+        if (new_tok.kind == C_TOKEN_EOF) {
+            break;
+        }
     }
 
     return list;
 }
 
-static int int_to_utf8(isize n, isize max_digits, char *buf, isize cap)
-{
-    isize dividend = 10;
-    isize digits = 1;
-    while (n % dividend != n) {
-        dividend *= 10;
-        digits += 1;
-    }
+// static int int_to_utf8(isize n, isize max_digits, char *buf, isize cap)
+// {
+//     isize dividend = 10;
+//     isize digits = 1;
+//     while (n % dividend != n) {
+//         dividend *= 10;
+//         digits += 1;
+//     }
 
-    while (digits > max_digits) {
-        dividend /= 10;
-        n %= dividend;
-        digits -= 1;
-    }
+//     while (digits > max_digits) {
+//         dividend /= 10;
+//         n %= dividend;
+//         digits -= 1;
+//     }
 
-    for (isize i = 0; i < digits && i < cap; i++) {
-        dividend /= 10;
-        buf[i] = '0' + n / dividend;
-        n %= dividend;
-    }
+//     for (isize i = 0; i < digits && i < cap; i++) {
+//         dividend /= 10;
+//         buf[i] = '0' + n / dividend;
+//         n %= dividend;
+//     }
 
-    buf[cap] = '\0';
-    return digits;
-}
+//     buf[cap] = '\0';
+//     return digits;
+// }
 
-static CyString append_token_info(
-    CyString str, String line,
-    String kind, String token
-) {
-    CyAllocator a = CY_STRING_HEADER(str)->alloc;
-    CyString new_line = cy_string_create_reserve(a, 0x20);
-    new_line = cy_string_append_view(new_line, line);
-    new_line = cy_string_pad_right(new_line, 10, ' ');
+// static CyString append_token_info(
+//     CyString str, String line,
+//     String kind, String token
+// ) {
+//     CyAllocator a = CY_STRING_HEADER(str)->alloc;
+//     CyString new_line = cy_string_create_reserve(a, 0x20);
+//     new_line = cy_string_append_view(new_line, line);
+//     new_line = cy_string_pad_right(new_line, 10, ' ');
 
-    // TODO(cya): replace with utf8_width
-    isize col_width = cy_utf8_codepoints(new_line) + 22;
-    new_line = cy_string_append_view(new_line, kind);
-    new_line = cy_string_pad_right(new_line, col_width, ' ');
+//     // TODO(cya): replace with utf8_width
+//     isize col_width = cy_utf8_codepoints(new_line) + 22;
+//     new_line = cy_string_append_view(new_line, kind);
+//     new_line = cy_string_pad_right(new_line, col_width, ' ');
 
-    new_line = cy_string_append_view(new_line, token);
-    str = cy_string_append(str, new_line);
+//     new_line = cy_string_append_view(new_line, token);
+//     str = cy_string_append(str, new_line);
 
-    cy_string_free(new_line);
-    return str;
-}
+//     cy_string_free(new_line);
+//     return str;
+// }
 
 #define LINE_NUM_MAX_DIGITS 9
 
-static CyString append_tokens_fmt(CyString str, const TokenList *l)
-{
-    str = append_token_info(
-        str,
-        cy_string_view_create_c("linha"),
-        cy_string_view_create_c("classe"),
-        cy_string_view_create_c("lexema")
-    );
-    for (isize i = 0; i < l->len; i++) {
-        Token *t = &l->arr[i];
+// static CyString append_tokens_fmt(CyString str, const TokenList *l)
+// {
+//     str = append_token_info(
+//         str,
+//         cy_string_view_create_c("linha"),
+//         cy_string_view_create_c("classe"),
+//         cy_string_view_create_c("lexema")
+//     );
+//     for (isize i = 0; i < l->len; i++) {
+//         Token *t = &l->arr[i];
 
-        char line_buf[LINE_NUM_MAX_DIGITS + 1];
-        isize line_buf_cap = CY_STATIC_STR_LEN(line_buf);
-        isize line_buf_len = int_to_utf8(
-            t->pos.line, line_buf_cap, line_buf, line_buf_cap
-        );
+//         char line_buf[LINE_NUM_MAX_DIGITS + 1];
+//         isize line_buf_cap = CY_STATIC_STR_LEN(line_buf);
+//         isize line_buf_len = int_to_utf8(
+//             t->pos.line, line_buf_cap, line_buf, line_buf_cap
+//         );
 
-        String line = cy_string_view_create_len(line_buf, line_buf_len);
-        String token_kind = string_from_token_kind(t->kind);
-        String token = t->str;
+//         String line = cy_string_view_create_len(line_buf, line_buf_len);
+//         String token_kind = string_from_token_kind(t->kind);
+//         String token = t->str;
 
-        str = cy_string_append_c(str, "\r\n");
-        str = append_token_info(str, line, token_kind, token);
-    }
+//         str = cy_string_append_c(str, "\r\n");
+//         str = append_token_info(str, line, token_kind, token);
+//     }
 
-    return str;
-}
+//     return str;
+// }
 
 static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 {
@@ -803,6 +805,740 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     return msg;
 }
 
+/* ----------------------------- Parser ------------------------------------- */
+#define NON_TERMINALS \
+    NON_TERMINAL(NT_START, "<inicio>"), \
+    NON_TERMINAL(NT_INSTR_LIST, "<lista_instr>"), \
+    NON_TERMINAL(NT_INSTR_LIST_R, "<lista_instr_rep>"), \
+    NON_TERMINAL(NT_INSTRUCTION, "<instrucao>"), \
+    NON_TERMINAL(NT_DEC_OR_ASSIGN, "<dec_ou_atr>"), \
+    NON_TERMINAL(NT_ASSIGN_OPT, "<atr_opt>"), \
+    NON_TERMINAL(NT_ID_LIST, "<lista_id>"), \
+    NON_TERMINAL(NT_ID_LIST_R, "<lista_id_mul>"), \
+    NON_TERMINAL(NT_CMD, "<cmd>"), \
+    NON_TERMINAL(NT_CMD_ASSIGN, "<cmd_atr>"), \
+    NON_TERMINAL(NT_CMD_INPUT, "<cmd_entr>"), \
+    NON_TERMINAL(NT_INPUT_LIST, "<lista_entr>"), \
+    NON_TERMINAL(NT_INPUT_LIST_R, "<lista_entr_mul>"), \
+    NON_TERMINAL(NT_STRING_OPT, "<cte_str_opt>"), \
+    NON_TERMINAL(NT_CMD_OUTPUT, "<cmd_saida>"), \
+    NON_TERMINAL(NT_CMD_OUTPUT_KEYWORD, "<cmd_saida_tipo>"), \
+    NON_TERMINAL(NT_EXPR_LIST, "<lista_expr>"), \
+    NON_TERMINAL(NT_EXPR_LIST_R, "<lista_expr_mul>"), \
+    NON_TERMINAL(NT_CMD_COND, "<cmd_sel>"), \
+    NON_TERMINAL(NT_ELIF, "<elif>"), \
+    NON_TERMINAL(NT_ELSE, "<else>"), \
+    NON_TERMINAL(NT_CMD_LIST, "<lista_cmd>"), \
+    NON_TERMINAL(NT_CMD_LIST_R, "<lista_cmd_mul>"), \
+    NON_TERMINAL(NT_CMD_LOOP, "<cmd_rep>"), \
+    NON_TERMINAL(NT_CMD_LOOP_KEYWORD, "<cmd_rep_tipo>"), \
+    NON_TERMINAL(NT_EXPR, "<expr>"), \
+    NON_TERMINAL(NT_EXPR_LOG, "<expr_log>"), \
+    NON_TERMINAL(NT_ELEMENT, "<elemento>"), \
+    NON_TERMINAL(NT_RELATIONAL, "<relacional>"), \
+    NON_TERMINAL(NT_RELATIONAL_R, "<relacional_mul>"), \
+    NON_TERMINAL(NT_RELATIONAL_OP, "<operador_relacional>"), \
+    NON_TERMINAL(NT_ARITHMETIC, "<aritmetica>"), \
+    NON_TERMINAL(NT_ARITHMETIC_R, "<aritmetica_mul>"), \
+    NON_TERMINAL(NT_TERM, "<termo>"), \
+    NON_TERMINAL(NT_TERM_R, "<termo_mul>"), \
+    NON_TERMINAL(NT_FACTOR, "<fator>"), \
+    NON_TERMINAL(NT_COUNT, ""),
+
+typedef enum {
+#define NON_TERMINAL(e, s) e
+    NON_TERMINALS
+#undef NON_TERMINAL
+} NonTerminal;
+
+const String g_non_terminal_strings[] = {
+#define NON_TERMINAL(e, s) {(const u8*)s, CY_STATIC_STR_LEN(s)}
+    NON_TERMINALS
+#undef NON_TERMINAL
+};
+
+static String string_from_non_terminal(NonTerminal n)
+{
+    if (n < 0 || n >= NT_COUNT) {
+        return cy_string_view_create_c("<ERRO>");
+    }
+
+    return g_non_terminal_strings[n];
+}
+
+typedef enum {
+    GR_0 = 1, GR_1, GR_2, GR_3, GR_4, GR_5, GR_6, GR_7, GR_8, GR_9, GR_10,
+    GR_11, GR_12, GR_13, GR_14, GR_15, GR_16, GR_17, GR_18, GR_19, GR_20, GR_21,
+    GR_22, GR_23, GR_24, GR_25, GR_26, GR_27, GR_28, GR_29, GR_30, GR_31, GR_32,
+    GR_33, GR_34, GR_35, GR_36, GR_37, GR_38, GR_39, GR_40, GR_41, GR_42, GR_43,
+    GR_44, GR_45, GR_46, GR_47, GR_48, GR_49, GR_50, GR_51, GR_52, GR_53, GR_54,
+    GR_55, GR_56, GR_57, GR_58, GR_59, GR_60, GR_61, GR_62, GR_63, GR_64, GR_65,
+    GR_66, GR_67, GR_68, GR_69, GR_70, GR_71, GR_72, GR_73,
+    GR_COUNT,
+} GrammarRule;
+
+CY_STATIC_ASSERT(GR_COUNT == 74 + 1);
+
+#define LL1_COLS \
+    LL1_COL(C_TOKEN_IDENT, 0), \
+    LL1_COL(C_TOKEN_INTEGER, 1), \
+    LL1_COL(C_TOKEN_FLOAT, 2), \
+    LL1_COL(C_TOKEN_STRING, 3), \
+    LL1_COL(C_TOKEN_SEMICOLON, 4), \
+    LL1_COL(C_TOKEN_COMMA, 5), \
+    LL1_COL(C_TOKEN_PAREN_OPEN, 6), \
+    LL1_COL(C_TOKEN_PAREN_CLOSE, 7), \
+    LL1_COL(C_TOKEN_EQUALS, 8), \
+    LL1_COL(C_TOKEN_AND, 9), \
+    LL1_COL(C_TOKEN_OR, 10), \
+    LL1_COL(C_TOKEN_NOT, 11), \
+    LL1_COL(C_TOKEN_CMP_EQ, 12), \
+    LL1_COL(C_TOKEN_CMP_NE, 13), \
+    LL1_COL(C_TOKEN_CMP_LT, 14), \
+    LL1_COL(C_TOKEN_CMP_GT, 15), \
+    LL1_COL(C_TOKEN_ADD, 16), \
+    LL1_COL(C_TOKEN_SUB, 17), \
+    LL1_COL(C_TOKEN_MUL, 18), \
+    LL1_COL(C_TOKEN_DIV, 19), \
+    LL1_COL(C_TOKEN_MAIN, 20), \
+    LL1_COL(C_TOKEN_READ, 21), \
+    LL1_COL(C_TOKEN_TRUE, 22), \
+    LL1_COL(C_TOKEN_FALSE, 23), \
+    LL1_COL(C_TOKEN_WRITE, 24), \
+    LL1_COL(C_TOKEN_WRITELN, 25), \
+    LL1_COL(C_TOKEN_IF, 26), \
+    LL1_COL(C_TOKEN_ELIF, 27), \
+    LL1_COL(C_TOKEN_ELSE, 28), \
+    LL1_COL(C_TOKEN_END, 29), \
+    LL1_COL(C_TOKEN_REPEAT, 30), \
+    LL1_COL(C_TOKEN_WHILE, 31), \
+    LL1_COL(C_TOKEN_UNTIL, 32), \
+
+#define LL1_COL_COUNT 33
+
+
+static u8 g_ll1_col_from_kind[] = {
+#define LL1_COL(k, c) [k] = c
+    LL1_COLS
+#undef LL1_COL
+};
+
+static u8 g_ll1_kind_from_col[] = {
+#define LL1_COL(k, c) [c] = k
+    LL1_COLS
+#undef LL1_COL
+};
+
+static GrammarRule g_ll1_table[NT_COUNT][LL1_COL_COUNT] = {
+    { [20] = GR_0, },
+    {
+        [0] = GR_1, [21] = GR_1, [24] = GR_1, [25] = GR_1, [26] = GR_1,
+        [30] = GR_1,
+    },
+    {
+        [0] = GR_2, [21] = GR_2, [24] = GR_2, [25] = GR_2, [26] = GR_2,
+        [29] = GR_3, [30] = GR_2,
+    },
+    {
+        [0] = GR_4, [21] = GR_5, [24] = GR_6, [25] = GR_6, [26] = GR_3,
+        [30] = GR_7,
+    },
+    { [0] = GR_9, },
+    { [4] = GR_11, [8] = GR_10, },
+    { [0] = GR_12, },
+    { [4] = GR_14, [5] = GR_13, [8] = GR_14, },
+    {
+        [0] = GR_15, [21] = GR_16, [24] = GR_17, [25] = GR_17, [26] = GR_19,
+        [30] = GR_18,
+    },
+    { [0] = GR_20, },
+    { [21] = GR_21, },
+    { [0] = GR_22, [3] = GR_22, },
+    { [5] = GR_23, [7] = GR_24, },
+    { [0] = GR_26, [3] = GR_25, },
+    { [24] = GR_27, [25] = GR_27, },
+    { [24] = GR_28, [25] = GR_29, },
+    {
+        [0] = GR_30, [1] = GR_30, [2] = GR_30, [3] = GR_30, [6] = GR_30,
+        [11] = GR_30, [16] = GR_30, [17] = GR_30, [22] = GR_30, [23] = GR_30,
+    },
+    { [5] = GR_31, [7] = GR_32, },
+    { [26] = GR_33, },
+    { [27] = GR_34, [28] = GR_35, [29] = GR_35, },
+    { [28] = GR_36, [29] = GR_37, },
+    {
+        [0] = GR_38, [21] = GR_38, [24] = GR_38, [25] = GR_38, [26] = GR_38,
+        [30] = GR_38,
+    },
+    {
+        [0] = GR_39, [21] = GR_39, [24] = GR_39, [25] = GR_39, [26] = GR_39,
+        [27] = GR_40, [28] = GR_40, [29] = GR_40, [30] = GR_39, [31] = GR_40,
+        [32] = GR_40,
+    },
+    { [30] = GR_41, },
+    { [31] = GR_42, [32] = GR_43, },
+    {
+        [0] = GR_44, [1] = GR_44, [2] = GR_44, [3] = GR_44, [6] = GR_44,
+        [11] = GR_44, [16] = GR_44, [17] = GR_44, [22] = GR_44,  [23] = GR_44,
+    },
+    {
+        [0] = GR_47, [4] = GR_47, [5] = GR_47, [7] = GR_47, [9] = GR_45,
+        [10] = GR_46, [21] = GR_47, [24] = GR_47, [25] = GR_47, [26] = GR_47,
+        [30] = GR_47,
+    },
+    {
+        [0] = GR_48, [1] = GR_48, [2] = GR_48, [3] = GR_48, [6] = GR_48,
+        [11] = GR_51, [16] = GR_48, [17] = GR_48, [22] = GR_49, [23] = GR_50,
+    },
+    {
+        [0] = GR_52, [1] = GR_52, [2] = GR_52, [3] = GR_52, [6] = GR_52,
+        [16] = GR_52, [17] = GR_52,
+    },
+    {
+        [0] = GR_54, [4] = GR_54, [5] = GR_54, [7] = GR_54, [9] = GR_54,
+        [10] = GR_54, [12] = GR_53, [13] = GR_53, [14] = GR_53, [15] = GR_53,
+        [21] = GR_54, [24] = GR_54, [25] = GR_54, [26] = GR_54, [30] = GR_54,
+    },
+    { [12] = GR_55, [13] = GR_56, [14] = GR_57, [15] = GR_58, },
+    {
+        [0] = GR_59, [1] = GR_59, [2] = GR_59, [3] = GR_59, [6] = GR_59,
+        [16] = GR_59, [17] = GR_59,
+    },
+    {
+        [0] = GR_62, [4] = GR_62, [5] = GR_62, [7] = GR_62, [9] = GR_62,
+        [10] = GR_62, [12] = GR_62, [13] = GR_62, [14] = GR_62, [15] = GR_62,
+        [16] = GR_60, [17] = GR_61, [21] = GR_62, [24] = GR_62, [25] = GR_62,
+        [26] = GR_62, [30] = GR_62,
+    },
+    {
+        [0] = GR_63, [1] = GR_63, [2] = GR_63, [3] = GR_63, [6] = GR_63,
+        [16] = GR_63, [17] = GR_63,
+    },
+    {
+        [0] = GR_66, [4] = GR_66, [5] = GR_66, [7] = GR_66, [9] = GR_66,
+        [10] = GR_66, [12] = GR_66, [13] = GR_66, [14] = GR_66, [15] = GR_66,
+        [16] = GR_66, [17] = GR_66, [18] = GR_64, [19] = GR_65, [21] = GR_66,
+        [24] = GR_66, [25] = GR_66, [26] = GR_66, [30] = GR_66,
+    },
+    {
+        [0] = GR_67, [1] = GR_68, [2] = GR_69, [3] = GR_70, [6] = GR_71,
+        [16] = GR_72, [17] = GR_73,
+    },
+};
+
+typedef enum {
+    P_ERR_OUT_OF_MEMORY = -1,
+    P_ERR_NONE,
+    P_ERR_REACHED_EOF,
+    P_ERR_UNEXPECTED_TOKEN,
+    P_ERR_INVALID_RULE,
+} ParserErrorKind;
+
+typedef enum {
+    AST_KIND_TOKEN,
+    AST_KIND_NON_TERMINAL,
+} AstItemKind;
+
+typedef struct {
+    AstItemKind kind;
+    union {
+        Token token;
+        NonTerminal non_terminal;
+    } u;
+} AstItem;
+
+typedef struct AstNode {
+    AstItem item;
+    struct AstNode **children;
+    isize child_count;
+} AstNode;
+
+typedef struct {
+    CyAllocator alloc;
+    AstNode *root;
+} Ast;
+
+typedef struct {
+    CyAllocator alloc;
+    AstItem *items;
+    isize len;
+    isize cap;
+} ParserStack;
+
+typedef struct {
+    ParserErrorKind kind;
+    AstItem expected;
+    Token found;
+} ParserError;
+
+typedef struct {
+    Token *read_tok;
+    ParserStack stack;
+    ParserError err;
+} Parser;
+
+#define PARSER_STACK_ALIGN (sizeof(Token))
+
+static inline void parser_stack_push_token(ParserStack *s, TokenKind kind);
+static inline void parser_stack_push_non_terminal(
+    ParserStack *s, NonTerminal n
+);
+
+// TODO(cya): we could probably just use the stack allocator for this
+static inline void parser_stack_push(ParserStack *s, AstItem item)
+{
+    if (s->len == s->cap) {
+        isize old_size = s->cap * sizeof(*s->items);
+        isize new_size = old_size * 2;
+        AstItem *items = cy_default_resize_align(
+            s->alloc, s->items,
+            old_size, new_size,
+            PARSER_STACK_ALIGN
+        );
+        if (items == NULL) {
+            // TODO(cya): abort here (OOM)
+            return;
+        }
+
+        s->items = items;
+        s->cap *= 2;
+    }
+
+    s->items[s->len++] = item;
+}
+
+static inline void parser_stack_push_token(ParserStack *s, TokenKind kind)
+{
+    parser_stack_push(s, (AstItem){
+        .kind = AST_KIND_TOKEN,
+        .u.token = (Token){.kind = kind, .str = g_token_strings[kind]},
+    });
+}
+
+static inline void parser_stack_push_non_terminal(ParserStack *s, NonTerminal n)
+{
+    parser_stack_push(s, (AstItem){
+        .kind = AST_KIND_NON_TERMINAL,
+        .u.non_terminal = n,
+    });
+}
+
+static inline void parser_stack_pop(ParserStack *s)
+{
+    if (s->len > 0) {
+        s->items[--s->len] = (AstItem){0};
+    }
+}
+
+static inline AstItem *parser_stack_peek(ParserStack *s)
+{
+    CY_VALIDATE_PTR(s);
+    return (s->len > 0) ? &s->items[s->len - 1] : NULL;
+}
+
+static void parser_error(Parser *p, ParserErrorKind kind)
+{
+    if (p == NULL) {
+        return;
+    }
+
+    p->err = (ParserError){
+        .kind = kind,
+        .expected = *(parser_stack_peek(&p->stack)),
+        .found = *p->read_tok,
+    };
+}
+
+static CyString reachable_terminals(CyAllocator a, NonTerminal n)
+{
+    CyString str = cy_string_create_reserve(a, 0x20);
+    str = cy_string_append_rune(str, '[');
+
+    GrammarRule *ll1_row = g_ll1_table[n];
+    for (isize i = 0; i < LL1_COL_COUNT; i++) {
+        if (ll1_row[i] == 0) {
+            continue;
+        }
+
+        TokenKind kind = g_ll1_kind_from_col[i];
+        String s = g_token_strings[kind];
+        str = cy_string_append_fmt(str, "`%.*s`, ", s.len, s.text);
+    }
+
+    int len = cy_string_len(str);
+    str[len - 1] = '\0';
+    str[len - 2] = ']';
+    cy__string_set_len(str, len - 1);
+    str = cy_string_shrink(str);
+
+    return str;
+}
+
+static CyString parser_create_error_msg(CyAllocator a, Parser *p)
+{
+    CyString msg = cy_string_create_reserve(a, 0x100);
+    msg = cy_string_append_fmt(msg, "linha %td: ", p->read_tok->pos.line);
+
+    String found_str = string_from_token_kind(p->err.found.kind);
+    String expected = {0};
+    switch (p->err.expected.kind) {
+    case AST_KIND_TOKEN: {
+        expected = p->err.expected.u.token.str;
+    } break;
+    case AST_KIND_NON_TERMINAL: {
+        expected = cy_string_view_create(
+            reachable_terminals(a, p->err.expected.u.non_terminal)
+        );
+    } break;
+    }
+
+    msg = cy_string_append_fmt(
+        msg, "esperava %.*s, encontrou %.*s",
+        expected.len, expected.text, found_str.len, found_str.text
+    );
+    msg = cy_string_shrink(msg);
+
+    return msg;
+}
+
+// NOTE(cya): must pass a stack allocator!
+static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
+{
+    AstItem *items = NULL;
+    isize cap = CY_MAX(l->len, 0x10);
+    isize size = cap * sizeof(*items);
+    items = cy_alloc_align(stack_allocator, size, PARSER_STACK_ALIGN);
+    if (items == NULL) {
+        return (Parser){ .err.kind = P_ERR_OUT_OF_MEMORY, };
+    }
+
+    ParserStack s = {
+        .alloc = stack_allocator,
+        .items = items,
+        .cap = cap,
+    };
+    parser_stack_push_token(&s, C_TOKEN_EOF);
+    parser_stack_push_non_terminal(&s, NT_START);
+
+    return (Parser){
+        .stack = s,
+        .read_tok = l->arr,
+    };
+}
+
+static Ast parse(CyAllocator a, Parser *p)
+{
+    CY_UNUSED(a);
+    // TODO(cya): build AST
+    Ast ast = {0};
+
+    for (;;) {
+        if (p->read_tok->kind == C_TOKEN_COMMENT) {
+            p->read_tok += 1;
+        }
+
+        AstItem *stack_top = parser_stack_peek(&p->stack);
+        if (stack_top->kind == AST_KIND_TOKEN) {
+            TokenKind kind = stack_top->u.token.kind;
+            if (kind != p->read_tok->kind) {
+                parser_error(p, P_ERR_UNEXPECTED_TOKEN);
+                break;
+            } else if (kind == C_TOKEN_EOF) {
+                break;
+            }
+
+            parser_stack_pop(&p->stack);
+            p->read_tok += 1;
+            continue;
+        }
+
+        u8 table_col = g_ll1_col_from_kind[p->read_tok->kind];
+        GrammarRule rule = g_ll1_table[stack_top->u.non_terminal][table_col];
+        if (rule == 0) {
+            parser_error(p, P_ERR_INVALID_RULE);
+            break;
+        }
+
+        parser_stack_pop(&p->stack);
+        switch (rule) {
+        case GR_0: {  // <inicio> ::= main <lista_instr> end
+            parser_stack_push_token(&p->stack, C_TOKEN_END);
+            parser_stack_push_non_terminal(&p->stack, NT_INSTR_LIST);
+            parser_stack_push_token(&p->stack, C_TOKEN_MAIN);
+        } break;
+        case GR_1: {  // <lista_instr> ::= <instrucao> ";" <lista_instr_rep>
+            parser_stack_push_non_terminal(&p->stack, NT_INSTR_LIST_R);
+            parser_stack_push_token(&p->stack, C_TOKEN_SEMICOLON);
+            parser_stack_push_non_terminal(&p->stack, NT_INSTRUCTION);
+        } break;
+        case GR_2: {  // <lista_instr_rep> ::= <lista_instr>
+            parser_stack_push_non_terminal(&p->stack, NT_INSTR_LIST);
+        } break;
+        case GR_3: {  // <lista_instr_rep> ::= î
+        } break;
+        case GR_4: {  // <instrucao> ::= <dec_ou_atr>
+            parser_stack_push_non_terminal(&p->stack, NT_DEC_OR_ASSIGN);
+        } break;
+        case GR_5: {  // <instrucao> ::= <cmd_entr>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_INPUT);
+        } break;
+        case GR_6: {  // <instrucao> ::= <cmd_saida>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_OUTPUT);
+        } break;
+        case GR_7: {  // <instrucao> ::= <cmd_rep>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LOOP);
+        } break;
+        case GR_8: {  // <instrucao> ::= <cmd_sel>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_COND);
+        } break;
+        case GR_9: {  // <dec_ou_atr> ::= <lista_id> <atr_opt>
+            parser_stack_push_non_terminal(&p->stack, NT_ASSIGN_OPT);
+            parser_stack_push_non_terminal(&p->stack, NT_ID_LIST);
+        } break;
+        case GR_10: { // <atr_opt> ::= "=" <expr>
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
+            parser_stack_push_token(&p->stack, C_TOKEN_EQUALS);
+        } break;
+        case GR_11: { // <atr_opt> ::= î
+        } break;
+        case GR_12: { // <lista_id> ::= identificador <lista_id_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_ID_LIST_R);
+            parser_stack_push_token(&p->stack, C_TOKEN_IDENT);
+        } break;
+        case GR_13: { // <lista_id_mul> ::= "," <lista_id>
+            parser_stack_push_non_terminal(&p->stack, NT_ID_LIST);
+            parser_stack_push_token(&p->stack, C_TOKEN_COMMA);
+        } break;
+        case GR_14: { // <lista_id_mul> ::= î
+        } break;
+        case GR_15: { // <cmd> ::= <cmd_atr>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_ASSIGN);
+        } break;
+        case GR_16: { // <cmd> ::= <cmd_entr>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_INPUT);
+        } break;
+        case GR_17: { // <cmd> ::= <cmd_saida>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_OUTPUT);
+        } break;
+        case GR_18: { // <cmd> ::= <cmd_rep>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LOOP);
+        } break;
+        case GR_19: { // <cmd> ::= <cmd_sel>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_COND);
+        } break;
+        case GR_20: { // <cmd_atr> ::= <lista_id> "=" <expr>
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
+            parser_stack_push_token(&p->stack, C_TOKEN_EQUALS);
+            parser_stack_push_non_terminal(&p->stack, NT_ID_LIST);
+        } break;
+        case GR_21: { // <cmd_entr> ::= read "(" <lista_entr> ")"
+            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_CLOSE);
+            parser_stack_push_non_terminal(&p->stack, NT_INPUT_LIST);
+            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_OPEN);
+            parser_stack_push_token(&p->stack, C_TOKEN_READ);
+        } break;
+        case GR_22: { // <lista_entr> ::= <cte_str_opt> id <lista_entr_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_INPUT_LIST_R);
+            parser_stack_push_token(&p->stack, C_TOKEN_IDENT);
+            parser_stack_push_non_terminal(&p->stack, NT_STRING_OPT);
+        } break;
+        case GR_23: { // <lista_entr_mul> ::= "," <lista_entr>
+            parser_stack_push_non_terminal(&p->stack, NT_INPUT_LIST);
+            parser_stack_push_token(&p->stack, C_TOKEN_COMMA);
+        } break;
+        case GR_24: { // <lista_entr_mul> ::= î
+        } break;
+        case GR_25: { // <cte_str_opt> ::= constante_string ","
+            parser_stack_push_token(&p->stack, C_TOKEN_COMMA);
+            parser_stack_push_token(&p->stack, C_TOKEN_STRING);
+        } break;
+        case GR_26: { // <cte_str_opt> ::= î
+        } break;
+        case GR_27: { // <cmd_saida> ::= <cmd_saida_tipo> "(" <lista_expr> ")"
+            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_CLOSE);
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LIST);
+            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_OPEN);
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_OUTPUT_KEYWORD);
+        } break;
+        case GR_28: { // <cmd_saida_tipo> ::= write
+            parser_stack_push_token(&p->stack, C_TOKEN_WRITE);
+        } break;
+        case GR_29: { // <cmd_saida_tipo> ::= writeln
+            parser_stack_push_token(&p->stack, C_TOKEN_WRITELN);
+        } break;
+        case GR_30: { // <lista_expr> ::= <expr> <lista_expr_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LIST_R);
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
+        } break;
+        case GR_31: { // <lista_expr_mul> ::= "," <lista_expr>
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LIST);
+            parser_stack_push_token(&p->stack, C_TOKEN_COMMA);
+        } break;
+        case GR_32: { // <lista_expr_mul> ::= î
+        } break;
+        case GR_33: { // <cmd_sel> ::= if <expr> <lista_cmd> <elif> <else> end
+            parser_stack_push_token(&p->stack, C_TOKEN_END);
+            parser_stack_push_non_terminal(&p->stack, NT_ELSE);
+            parser_stack_push_non_terminal(&p->stack, NT_ELIF);
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
+            parser_stack_push_token(&p->stack, C_TOKEN_IF);
+        } break;
+        case GR_34: { // <elif> ::= elif <expr> <lista_cmd> <elif>
+            parser_stack_push_non_terminal(&p->stack, NT_ELIF);
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
+            parser_stack_push_token(&p->stack, C_TOKEN_ELIF);
+        } break;
+        case GR_35: { // <elif> ::= î
+        } break;
+        case GR_36: { // <else> ::= else <lista_cmd>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
+            parser_stack_push_token(&p->stack, C_TOKEN_ELSE);
+        } break;
+        case GR_37: { // <else> ::= î
+        } break;
+        case GR_38: { // <lista_cmd> ::= <cmd> ";" <lista_cmd_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST_R);
+            parser_stack_push_token(&p->stack, C_TOKEN_SEMICOLON);
+            parser_stack_push_non_terminal(&p->stack, NT_CMD);
+        } break;
+        case GR_39: { // <lista_cmd_mul> ::= <lista_cmd>
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
+        } break;
+        case GR_40: { // <lista_cmd_mul> ::= î
+        } break;
+        case GR_41: { // <cmd_rep> ::= repeat <lista_cmd> <cmd_rep_tipo> <expr>
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LOOP_KEYWORD);
+            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
+            parser_stack_push_token(&p->stack, C_TOKEN_REPEAT);
+        } break;
+        case GR_42: { // <cmd_rep_tipo> ::= while
+            parser_stack_push_token(&p->stack, C_TOKEN_WHILE);
+        } break;
+        case GR_43: { // <cmd_rep_tipo> ::= until
+            parser_stack_push_token(&p->stack, C_TOKEN_UNTIL);
+        } break;
+        case GR_44: { // <expr> ::= <elemento> <expr_log>
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LOG);
+            parser_stack_push_non_terminal(&p->stack, NT_ELEMENT);
+        } break;
+        case GR_45: { // <expr_log> ::= "&&" <elemento> <expr_log>
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LOG);
+            parser_stack_push_non_terminal(&p->stack, NT_ELEMENT);
+            parser_stack_push_token(&p->stack, C_TOKEN_AND);
+        } break;
+        case GR_46: { // <expr_log> ::= "||" <elemento> <expr_log>
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LOG);
+            parser_stack_push_non_terminal(&p->stack, NT_ELEMENT);
+            parser_stack_push_token(&p->stack, C_TOKEN_OR);
+        } break;
+        case GR_47: { // <expr_log> ::= î
+        } break;
+        case GR_48: { // <elemento> ::= <relacional>
+            parser_stack_push_non_terminal(&p->stack, NT_RELATIONAL);
+        } break;
+        case GR_49: { // <elemento> ::= true
+            parser_stack_push_token(&p->stack, C_TOKEN_TRUE);
+        } break;
+        case GR_50: { // <elemento> ::= false
+            parser_stack_push_token(&p->stack, C_TOKEN_FALSE);
+        } break;
+        case GR_51: { // <elemento> ::= "!" <elemento>
+            parser_stack_push_non_terminal(&p->stack, NT_ELEMENT);
+            parser_stack_push_token(&p->stack, C_TOKEN_NOT);
+        } break;
+        case GR_52: { // <relacional> ::= <aritmetica> <relacional_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_RELATIONAL_R);
+            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC);
+        } break;
+        case GR_53: { // <relacional_mul> ::= <operador_relacional> <aritmetica>
+            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC);
+            parser_stack_push_non_terminal(&p->stack, NT_RELATIONAL_OP);
+        } break;
+        case GR_54: { // <relacional_mul> ::= î
+        } break;
+        case GR_55: { // <operador_relacional> ::= "=="
+            parser_stack_push_token(&p->stack, C_TOKEN_CMP_EQ);
+        } break;
+        case GR_56: { // <operador_relacional> ::= "!="
+            parser_stack_push_token(&p->stack, C_TOKEN_CMP_NE);
+        } break;
+        case GR_57: { // <operador_relacional> ::= "<"
+            parser_stack_push_token(&p->stack, C_TOKEN_CMP_LT);
+        } break;
+        case GR_58: { // <operador_relacional> ::= ">"
+            parser_stack_push_token(&p->stack, C_TOKEN_CMP_GT);
+        } break;
+        case GR_59: { // <aritmetica> ::= <termo> <aritmetica_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC_R);
+            parser_stack_push_non_terminal(&p->stack, NT_TERM);
+        } break;
+        case GR_60: { // <aritmetica_mul> ::= "+" <termo> <aritmetica_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC_R);
+            parser_stack_push_non_terminal(&p->stack, NT_TERM);
+            parser_stack_push_token(&p->stack, C_TOKEN_ADD);
+        } break;
+        case GR_61: { // <aritmetica_mul> ::= "-" <termo> <aritmetica_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC_R);
+            parser_stack_push_non_terminal(&p->stack, NT_TERM);
+            parser_stack_push_token(&p->stack, C_TOKEN_SUB);
+        } break;
+        case GR_62: { // <aritmetica_mul> ::= î
+        } break;
+        case GR_63: { // <termo> ::= <fator> <termo_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_TERM_R);
+            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
+        } break;
+        case GR_64: { // <termo_mul> ::= "*" <fator> <termo_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_TERM_R);
+            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
+            parser_stack_push_token(&p->stack, C_TOKEN_MUL);
+        } break;
+        case GR_65: { // <termo_mul> ::= "/" <fator> <termo_mul>
+            parser_stack_push_non_terminal(&p->stack, NT_TERM_R);
+            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
+            parser_stack_push_token(&p->stack, C_TOKEN_DIV);
+        } break;
+        case GR_66: { // <termo_mul> ::= î
+        } break;
+        case GR_67: {  // <fator> ::= identificador
+            parser_stack_push_token(&p->stack, C_TOKEN_IDENT);
+        } break;
+        case GR_68: {  // <fator> ::= constante_int
+            parser_stack_push_token(&p->stack, C_TOKEN_INTEGER);
+        } break;
+        case GR_69: {  // <fator> ::= constante_float
+            parser_stack_push_token(&p->stack, C_TOKEN_FLOAT);
+        } break;
+        case GR_70: { // <fator> ::= constante_string
+            parser_stack_push_token(&p->stack, C_TOKEN_STRING);
+        } break;
+        case GR_71: { // <fator> ::= "(" <expr> ")"
+            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_CLOSE);
+            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
+            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_OPEN);
+        } break;
+        case GR_72: { // <fator> ::= "+" <fator>
+            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
+            parser_stack_push_token(&p->stack, C_TOKEN_ADD);
+        } break;
+        case GR_73: { // <fator> ::= "-" <fator>
+            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
+            parser_stack_push_token(&p->stack, C_TOKEN_SUB);
+        } break;
+        default: {
+            // TODO(cya): panic here
+            parser_error(p, P_ERR_INVALID_RULE);
+            return ast;
+        } break;
+        }
+    }
+
+    return ast;
+}
+
 CyString compile(String src_code)
 {
     LARGE_INTEGER perf_freq;
@@ -813,14 +1549,25 @@ CyString compile(String src_code)
 
     CyArena tokenizer_arena = cy_arena_init(cy_heap_allocator(), 0x4000);
     CyAllocator temp_allocator = cy_arena_allocator(&tokenizer_arena);
-    CyAllocator perm_allocator = cy_heap_allocator();
+    CyAllocator heap_allocator = cy_heap_allocator();
 
     Tokenizer t = tokenizer_init(src_code);
     TokenList token_list = tokenize(temp_allocator, &t, true);
     if (t.err != T_ERR_NONE) {
         cy_free_all(temp_allocator);
-        return tokenizer_create_error_msg(perm_allocator, &t);
+        return tokenizer_create_error_msg(heap_allocator, &t);
     }
+
+    isize stack_size = token_list.len * sizeof(AstItem);
+    CyStack parser_stack = cy_stack_init(heap_allocator, stack_size);
+    CyAllocator stack_allocator = cy_stack_allocator(&parser_stack);
+    Parser p = parser_init(stack_allocator, &token_list);
+    Ast a = parse(temp_allocator, &p);
+    if (p.err.kind != P_ERR_NONE) {
+        return parser_create_error_msg(heap_allocator, &p);
+    }
+
+    CY_UNUSED(a);
 
     // CyCounter end_counter = cy_counter_query();
     // f64 elapsed_us = cy_counter_to_us(end_counter - start_counter);
@@ -829,16 +1576,15 @@ CyString compile(String src_code)
     f64 elapsed_us = (end_counter.QuadPart - start_counter.QuadPart) *
         1000000.0 / perf_freq.QuadPart;
 
-    isize init_cap = 0x100 + token_list.len * 50;
-    CyString output = cy_string_create_reserve(perm_allocator, init_cap);
-    output = append_tokens_fmt(output, &token_list);
+    isize init_cap = 0x100;
+    CyString output = cy_string_create_reserve(heap_allocator, init_cap);
     output = cy_string_append_fmt(
-        output,
-        "\r\n\r\nprograma tokenizado com sucesso em %.01fμs (tokens: %td)",
-        elapsed_us, token_list.len
+        output, "análise sintática completada em %.01fμs", elapsed_us
     );
     output = cy_string_shrink(output);
 
+    cy_stack_deinit(&parser_stack);
     cy_arena_deinit(&tokenizer_arena);
+
     return output;
 }
