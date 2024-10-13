@@ -806,6 +806,8 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 }
 
 /* ----------------------------- Parser ------------------------------------- */
+// TODO(cya): change these strings to useful descriptions so we can plug them
+// into the error messages
 #define NON_TERMINALS \
     NON_TERMINAL(NT_START, "<inicio>"), \
     NON_TERMINAL(NT_INSTR_LIST, "<lista_instr>"), \
