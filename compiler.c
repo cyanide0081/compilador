@@ -809,7 +809,9 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 // TODO(cya): change these strings to useful descriptions so we can plug them
 // into the error messages
 #define NON_TERMINALS \
-    NON_TERMINAL(NT_START, "<inicio>"), \
+    NON_TERMINAL(NT_START, "<main>"), \
+\
+NON_TERMINAL(NT__INSTRUCTION_BEGIN, ""), \
     NON_TERMINAL(NT_INSTR_LIST, "<lista_instr>"), \
     NON_TERMINAL(NT_INSTR_LIST_R, "<lista_instr_rep>"), \
     NON_TERMINAL(NT_INSTRUCTION, "<instrucao>"), \
@@ -817,6 +819,9 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     NON_TERMINAL(NT_ASSIGN_OPT, "<atr_opt>"), \
     NON_TERMINAL(NT_ID_LIST, "<lista_id>"), \
     NON_TERMINAL(NT_ID_LIST_R, "<lista_id_mul>"), \
+NON_TERMINAL(NT__INSTRUCTION_END, ""), \
+\
+NON_TERMINAL(NT__COMMAND_BEGIN, ""), \
     NON_TERMINAL(NT_CMD, "<cmd>"), \
     NON_TERMINAL(NT_CMD_ASSIGN, "<cmd_atr>"), \
     NON_TERMINAL(NT_CMD_INPUT, "<cmd_entr>"), \
@@ -834,6 +839,9 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     NON_TERMINAL(NT_CMD_LIST_R, "<lista_cmd_mul>"), \
     NON_TERMINAL(NT_CMD_LOOP, "<cmd_rep>"), \
     NON_TERMINAL(NT_CMD_LOOP_KEYWORD, "<cmd_rep_tipo>"), \
+NON_TERMINAL(NT__COMMAND_END, ""), \
+\
+NON_TERMINAL(NT__EXPRESSION_BEGIN, ""), \
     NON_TERMINAL(NT_EXPR, "<expr>"), \
     NON_TERMINAL(NT_EXPR_LOG, "<expr_log>"), \
     NON_TERMINAL(NT_ELEMENT, "<elemento>"), \
@@ -845,7 +853,10 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     NON_TERMINAL(NT_TERM, "<termo>"), \
     NON_TERMINAL(NT_TERM_R, "<termo_mul>"), \
     NON_TERMINAL(NT_FACTOR, "<fator>"), \
+NON_TERMINAL(NT__EXPRESSION_END, ""), \
     NON_TERMINAL(NT_COUNT, ""),
+
+#define NT_IS_OF_CLASS(n, c) (n > NT__##c##_BEGIN && n < NT__##c##_END)
 
 typedef enum {
 #define NON_TERMINAL(e, s) e
@@ -859,7 +870,7 @@ const String g_non_terminal_strings[] = {
 #undef NON_TERMINAL
 };
 
-static String string_from_non_terminal(NonTerminal n)
+static inline String non_terminal_string(NonTerminal n)
 {
     if (n < 0 || n >= NT_COUNT) {
         return cy_string_view_create_c("<ERRO>");
@@ -868,8 +879,29 @@ static String string_from_non_terminal(NonTerminal n)
     return g_non_terminal_strings[n];
 }
 
+static inline String non_terminal_description(NonTerminal n)
+{
+    const char *desc = NULL;
+    if (NT_IS_OF_CLASS(n, INSTRUCTION)) {
+        desc = "instrução";
+    } else if (NT_IS_OF_CLASS(n, COMMAND)) {
+        desc = "comando";
+    } else if (NT_IS_OF_CLASS(n, EXPRESSION)) {
+        desc = "expressão";
+    } else switch (n) {
+    case NT_START: {
+        desc = "ponto de entrada";
+    } break;
+    default: {
+        desc = "(erro)";
+    } break;
+    }
+
+    return cy_string_view_create_c(desc);
+}
+
 typedef enum {
-    GR_0 = 1, GR_1, GR_2, GR_3, GR_4, GR_5, GR_6, GR_7, GR_8, GR_9, GR_10,
+    GR_NONE, GR_0, GR_1, GR_2, GR_3, GR_4, GR_5, GR_6, GR_7, GR_8, GR_9, GR_10,
     GR_11, GR_12, GR_13, GR_14, GR_15, GR_16, GR_17, GR_18, GR_19, GR_20, GR_21,
     GR_22, GR_23, GR_24, GR_25, GR_26, GR_27, GR_28, GR_29, GR_30, GR_31, GR_32,
     GR_33, GR_34, GR_35, GR_36, GR_37, GR_38, GR_39, GR_40, GR_41, GR_42, GR_43,
@@ -880,6 +912,52 @@ typedef enum {
 } GrammarRule;
 
 CY_STATIC_ASSERT(GR_COUNT == 74 + 1);
+
+#define LL1_ROWS \
+    LL1_ROW(NT_START, 0), \
+    LL1_ROW(NT_INSTR_LIST, 1), \
+    LL1_ROW(NT_INSTR_LIST_R, 2), \
+    LL1_ROW(NT_INSTRUCTION, 3), \
+    LL1_ROW(NT_DEC_OR_ASSIGN, 4), \
+    LL1_ROW(NT_ASSIGN_OPT, 5), \
+    LL1_ROW(NT_ID_LIST, 6), \
+    LL1_ROW(NT_ID_LIST_R, 7), \
+    LL1_ROW(NT_CMD, 8), \
+    LL1_ROW(NT_CMD_ASSIGN, 9), \
+    LL1_ROW(NT_CMD_INPUT, 10), \
+    LL1_ROW(NT_INPUT_LIST, 11), \
+    LL1_ROW(NT_INPUT_LIST_R, 12), \
+    LL1_ROW(NT_STRING_OPT, 13), \
+    LL1_ROW(NT_CMD_OUTPUT, 14), \
+    LL1_ROW(NT_CMD_OUTPUT_KEYWORD, 15), \
+    LL1_ROW(NT_EXPR_LIST, 16), \
+    LL1_ROW(NT_EXPR_LIST_R, 17), \
+    LL1_ROW(NT_CMD_COND, 18), \
+    LL1_ROW(NT_ELIF, 19), \
+    LL1_ROW(NT_ELSE, 20), \
+    LL1_ROW(NT_CMD_LIST, 21), \
+    LL1_ROW(NT_CMD_LIST_R, 22), \
+    LL1_ROW(NT_CMD_LOOP, 23), \
+    LL1_ROW(NT_CMD_LOOP_KEYWORD, 24), \
+    LL1_ROW(NT_EXPR, 25), \
+    LL1_ROW(NT_EXPR_LOG, 26), \
+    LL1_ROW(NT_ELEMENT, 27), \
+    LL1_ROW(NT_RELATIONAL, 28), \
+    LL1_ROW(NT_RELATIONAL_R, 29), \
+    LL1_ROW(NT_RELATIONAL_OP, 30), \
+    LL1_ROW(NT_ARITHMETIC, 31), \
+    LL1_ROW(NT_ARITHMETIC_R, 32), \
+    LL1_ROW(NT_TERM, 33), \
+    LL1_ROW(NT_TERM_R, 34), \
+    LL1_ROW(NT_FACTOR, 35), \
+
+#define LL1_ROW_COUNT 36
+
+static u8 g_ll1_row_from_kind[] = {
+#define LL1_ROW(n, r) [n] = r
+    LL1_ROWS
+#undef LL1_ROW
+};
 
 #define LL1_COLS \
     LL1_COL(C_TOKEN_IDENT, 0), \
@@ -917,7 +995,6 @@ CY_STATIC_ASSERT(GR_COUNT == 74 + 1);
     LL1_COL(C_TOKEN_UNTIL, 32), \
 
 #define LL1_COL_COUNT 33
-
 
 static u8 g_ll1_col_from_kind[] = {
 #define LL1_COL(k, c) [k] = c
@@ -1081,64 +1158,61 @@ typedef struct {
 
 #define PARSER_STACK_ALIGN (sizeof(Token))
 
-static inline void parser_stack_push_token(ParserStack *s, TokenKind kind);
-static inline void parser_stack_push_non_terminal(
-    ParserStack *s, NonTerminal n
-);
+static inline void parser_error(Parser *p, ParserErrorKind kind);
 
 // TODO(cya): we could probably just use the stack allocator for this
-static inline void parser_stack_push(ParserStack *s, AstItem item)
+static inline void parser_stack_push(Parser *p, AstItem item)
 {
-    if (s->len == s->cap) {
-        isize old_size = s->cap * sizeof(*s->items);
+    if (p->stack.len == p->stack.cap) {
+        isize old_size = p->stack.cap * sizeof(*p->stack.items);
         isize new_size = old_size * 2;
         AstItem *items = cy_default_resize_align(
-            s->alloc, s->items,
+            p->stack.alloc, p->stack.items,
             old_size, new_size,
             PARSER_STACK_ALIGN
         );
         if (items == NULL) {
-            // TODO(cya): abort here (OOM)
+            parser_error(p, P_ERR_OUT_OF_MEMORY);
             return;
         }
 
-        s->items = items;
-        s->cap *= 2;
+        p->stack.items = items;
+        p->stack.cap *= 2;
     }
 
-    s->items[s->len++] = item;
+    p->stack.items[p->stack.len++] = item;
 }
 
-static inline void parser_stack_push_token(ParserStack *s, TokenKind kind)
+static inline void parser_stack_push_token(Parser *p, TokenKind kind)
 {
-    parser_stack_push(s, (AstItem){
+    parser_stack_push(p, (AstItem){
         .kind = AST_KIND_TOKEN,
         .u.token = (Token){.kind = kind, .str = g_token_strings[kind]},
     });
 }
 
-static inline void parser_stack_push_non_terminal(ParserStack *s, NonTerminal n)
+static inline void parser_stack_push_non_terminal(Parser *p, NonTerminal n)
 {
-    parser_stack_push(s, (AstItem){
+    parser_stack_push(p, (AstItem){
         .kind = AST_KIND_NON_TERMINAL,
         .u.non_terminal = n,
     });
 }
 
-static inline void parser_stack_pop(ParserStack *s)
+static inline void parser_stack_pop(Parser *p)
 {
-    if (s->len > 0) {
-        s->items[--s->len] = (AstItem){0};
+    if (p->stack.len > 0) {
+        p->stack.items[--p->stack.len] = (AstItem){0};
     }
 }
 
-static inline AstItem *parser_stack_peek(ParserStack *s)
+static inline AstItem *parser_stack_peek(Parser *p)
 {
-    CY_VALIDATE_PTR(s);
-    return (s->len > 0) ? &s->items[s->len - 1] : NULL;
+    CY_VALIDATE_PTR(p);
+    return (p->stack.len > 0) ? &p->stack.items[p->stack.len - 1] : NULL;
 }
 
-static void parser_error(Parser *p, ParserErrorKind kind)
+static inline void parser_error(Parser *p, ParserErrorKind kind)
 {
     if (p == NULL) {
         return;
@@ -1146,7 +1220,7 @@ static void parser_error(Parser *p, ParserErrorKind kind)
 
     p->err = (ParserError){
         .kind = kind,
-        .expected = *(parser_stack_peek(&p->stack)),
+        .expected = *(parser_stack_peek(p)),
         .found = *p->read_tok,
     };
 }
@@ -1158,7 +1232,7 @@ static CyString reachable_terminals(CyAllocator a, NonTerminal n)
 
     GrammarRule *ll1_row = g_ll1_table[n];
     for (isize i = 0; i < LL1_COL_COUNT; i++) {
-        if (ll1_row[i] == 0) {
+        if (ll1_row[i] == GR_NONE) {
             continue;
         }
 
@@ -1181,25 +1255,31 @@ static CyString parser_create_error_msg(CyAllocator a, Parser *p)
     CyString msg = cy_string_create_reserve(a, 0x100);
     msg = cy_string_append_fmt(msg, "linha %td: ", p->read_tok->pos.line);
 
-    String found_str = string_from_token_kind(p->err.found.kind);
+    String found = p->err.found.str;
+    String found_kind = string_from_token_kind(p->err.found.kind);
     String expected = {0};
     switch (p->err.expected.kind) {
     case AST_KIND_TOKEN: {
         expected = p->err.expected.u.token.str;
     } break;
     case AST_KIND_NON_TERMINAL: {
-        expected = cy_string_view_create(
-            reachable_terminals(a, p->err.expected.u.non_terminal)
-        );
+        // expected = cy_string_view_create(
+        //     reachable_terminals(a, p->err.expected.u.non_terminal)
+        // );
+        expected = non_terminal_description(p->err.expected.u.non_terminal);
     } break;
     }
 
     msg = cy_string_append_fmt(
         msg, "esperava %.*s, encontrou %.*s",
-        expected.len, expected.text, found_str.len, found_str.text
+        expected.len, expected.text,
+        found_kind.len, found_kind.text
     );
-    msg = cy_string_shrink(msg);
+    if (found.len > 0) {
+        msg = cy_string_append_fmt(msg, " (`%.*s`)", found.len, found.text);
+    }
 
+    msg = cy_string_shrink(msg);
     return msg;
 }
 
@@ -1214,18 +1294,18 @@ static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
         return (Parser){ .err.kind = P_ERR_OUT_OF_MEMORY, };
     }
 
-    ParserStack s = {
-        .alloc = stack_allocator,
-        .items = items,
-        .cap = cap,
-    };
-    parser_stack_push_token(&s, C_TOKEN_EOF);
-    parser_stack_push_non_terminal(&s, NT_START);
-
-    return (Parser){
-        .stack = s,
+    Parser p = {
         .read_tok = l->arr,
+        .stack = (ParserStack){
+            .alloc = stack_allocator,
+            .items = items,
+            .cap = cap,
+        },
     };
+    parser_stack_push_token(&p, C_TOKEN_EOF);
+    parser_stack_push_non_terminal(&p, NT_START);
+
+    return p;
 }
 
 static Ast parse(CyAllocator a, Parser *p)
@@ -1235,11 +1315,13 @@ static Ast parse(CyAllocator a, Parser *p)
     Ast ast = {0};
 
     for (;;) {
-        if (p->read_tok->kind == C_TOKEN_COMMENT) {
+        if (p->err.kind != P_ERR_NONE) {
+            break;
+        } else if (p->read_tok->kind == C_TOKEN_COMMENT) {
             p->read_tok += 1;
         }
 
-        AstItem *stack_top = parser_stack_peek(&p->stack);
+        AstItem *stack_top = parser_stack_peek(p);
         if (stack_top->kind == AST_KIND_TOKEN) {
             TokenKind kind = stack_top->u.token.kind;
             if (kind != p->read_tok->kind) {
@@ -1249,286 +1331,287 @@ static Ast parse(CyAllocator a, Parser *p)
                 break;
             }
 
-            parser_stack_pop(&p->stack);
+            parser_stack_pop(p);
             p->read_tok += 1;
             continue;
         }
 
+        u8 table_row = g_ll1_row_from_kind[stack_top->u.non_terminal];
         u8 table_col = g_ll1_col_from_kind[p->read_tok->kind];
-        GrammarRule rule = g_ll1_table[stack_top->u.non_terminal][table_col];
-        if (rule == 0) {
+        GrammarRule rule = g_ll1_table[table_row][table_col];
+        if (rule == GR_NONE) {
             parser_error(p, P_ERR_INVALID_RULE);
             break;
         }
 
-        parser_stack_pop(&p->stack);
+        parser_stack_pop(p);
         switch (rule) {
         case GR_0: {  // <inicio> ::= main <lista_instr> end
-            parser_stack_push_token(&p->stack, C_TOKEN_END);
-            parser_stack_push_non_terminal(&p->stack, NT_INSTR_LIST);
-            parser_stack_push_token(&p->stack, C_TOKEN_MAIN);
+            parser_stack_push_token(p, C_TOKEN_END);
+            parser_stack_push_non_terminal(p, NT_INSTR_LIST);
+            parser_stack_push_token(p, C_TOKEN_MAIN);
         } break;
         case GR_1: {  // <lista_instr> ::= <instrucao> ";" <lista_instr_rep>
-            parser_stack_push_non_terminal(&p->stack, NT_INSTR_LIST_R);
-            parser_stack_push_token(&p->stack, C_TOKEN_SEMICOLON);
-            parser_stack_push_non_terminal(&p->stack, NT_INSTRUCTION);
+            parser_stack_push_non_terminal(p, NT_INSTR_LIST_R);
+            parser_stack_push_token(p, C_TOKEN_SEMICOLON);
+            parser_stack_push_non_terminal(p, NT_INSTRUCTION);
         } break;
         case GR_2: {  // <lista_instr_rep> ::= <lista_instr>
-            parser_stack_push_non_terminal(&p->stack, NT_INSTR_LIST);
+            parser_stack_push_non_terminal(p, NT_INSTR_LIST);
         } break;
         case GR_3: {  // <lista_instr_rep> ::= î
         } break;
         case GR_4: {  // <instrucao> ::= <dec_ou_atr>
-            parser_stack_push_non_terminal(&p->stack, NT_DEC_OR_ASSIGN);
+            parser_stack_push_non_terminal(p, NT_DEC_OR_ASSIGN);
         } break;
         case GR_5: {  // <instrucao> ::= <cmd_entr>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_INPUT);
+            parser_stack_push_non_terminal(p, NT_CMD_INPUT);
         } break;
         case GR_6: {  // <instrucao> ::= <cmd_saida>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_OUTPUT);
+            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT);
         } break;
         case GR_7: {  // <instrucao> ::= <cmd_rep>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LOOP);
+            parser_stack_push_non_terminal(p, NT_CMD_LOOP);
         } break;
         case GR_8: {  // <instrucao> ::= <cmd_sel>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_COND);
+            parser_stack_push_non_terminal(p, NT_CMD_COND);
         } break;
         case GR_9: {  // <dec_ou_atr> ::= <lista_id> <atr_opt>
-            parser_stack_push_non_terminal(&p->stack, NT_ASSIGN_OPT);
-            parser_stack_push_non_terminal(&p->stack, NT_ID_LIST);
+            parser_stack_push_non_terminal(p, NT_ASSIGN_OPT);
+            parser_stack_push_non_terminal(p, NT_ID_LIST);
         } break;
         case GR_10: { // <atr_opt> ::= "=" <expr>
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
-            parser_stack_push_token(&p->stack, C_TOKEN_EQUALS);
+            parser_stack_push_non_terminal(p, NT_EXPR);
+            parser_stack_push_token(p, C_TOKEN_EQUALS);
         } break;
         case GR_11: { // <atr_opt> ::= î
         } break;
         case GR_12: { // <lista_id> ::= identificador <lista_id_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_ID_LIST_R);
-            parser_stack_push_token(&p->stack, C_TOKEN_IDENT);
+            parser_stack_push_non_terminal(p, NT_ID_LIST_R);
+            parser_stack_push_token(p, C_TOKEN_IDENT);
         } break;
         case GR_13: { // <lista_id_mul> ::= "," <lista_id>
-            parser_stack_push_non_terminal(&p->stack, NT_ID_LIST);
-            parser_stack_push_token(&p->stack, C_TOKEN_COMMA);
+            parser_stack_push_non_terminal(p, NT_ID_LIST);
+            parser_stack_push_token(p, C_TOKEN_COMMA);
         } break;
         case GR_14: { // <lista_id_mul> ::= î
         } break;
         case GR_15: { // <cmd> ::= <cmd_atr>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_ASSIGN);
+            parser_stack_push_non_terminal(p, NT_CMD_ASSIGN);
         } break;
         case GR_16: { // <cmd> ::= <cmd_entr>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_INPUT);
+            parser_stack_push_non_terminal(p, NT_CMD_INPUT);
         } break;
         case GR_17: { // <cmd> ::= <cmd_saida>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_OUTPUT);
+            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT);
         } break;
         case GR_18: { // <cmd> ::= <cmd_rep>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LOOP);
+            parser_stack_push_non_terminal(p, NT_CMD_LOOP);
         } break;
         case GR_19: { // <cmd> ::= <cmd_sel>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_COND);
+            parser_stack_push_non_terminal(p, NT_CMD_COND);
         } break;
         case GR_20: { // <cmd_atr> ::= <lista_id> "=" <expr>
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
-            parser_stack_push_token(&p->stack, C_TOKEN_EQUALS);
-            parser_stack_push_non_terminal(&p->stack, NT_ID_LIST);
+            parser_stack_push_non_terminal(p, NT_EXPR);
+            parser_stack_push_token(p, C_TOKEN_EQUALS);
+            parser_stack_push_non_terminal(p, NT_ID_LIST);
         } break;
         case GR_21: { // <cmd_entr> ::= read "(" <lista_entr> ")"
-            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_CLOSE);
-            parser_stack_push_non_terminal(&p->stack, NT_INPUT_LIST);
-            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_OPEN);
-            parser_stack_push_token(&p->stack, C_TOKEN_READ);
+            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE);
+            parser_stack_push_non_terminal(p, NT_INPUT_LIST);
+            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN);
+            parser_stack_push_token(p, C_TOKEN_READ);
         } break;
         case GR_22: { // <lista_entr> ::= <cte_str_opt> id <lista_entr_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_INPUT_LIST_R);
-            parser_stack_push_token(&p->stack, C_TOKEN_IDENT);
-            parser_stack_push_non_terminal(&p->stack, NT_STRING_OPT);
+            parser_stack_push_non_terminal(p, NT_INPUT_LIST_R);
+            parser_stack_push_token(p, C_TOKEN_IDENT);
+            parser_stack_push_non_terminal(p, NT_STRING_OPT);
         } break;
         case GR_23: { // <lista_entr_mul> ::= "," <lista_entr>
-            parser_stack_push_non_terminal(&p->stack, NT_INPUT_LIST);
-            parser_stack_push_token(&p->stack, C_TOKEN_COMMA);
+            parser_stack_push_non_terminal(p, NT_INPUT_LIST);
+            parser_stack_push_token(p, C_TOKEN_COMMA);
         } break;
         case GR_24: { // <lista_entr_mul> ::= î
         } break;
         case GR_25: { // <cte_str_opt> ::= constante_string ","
-            parser_stack_push_token(&p->stack, C_TOKEN_COMMA);
-            parser_stack_push_token(&p->stack, C_TOKEN_STRING);
+            parser_stack_push_token(p, C_TOKEN_COMMA);
+            parser_stack_push_token(p, C_TOKEN_STRING);
         } break;
         case GR_26: { // <cte_str_opt> ::= î
         } break;
         case GR_27: { // <cmd_saida> ::= <cmd_saida_tipo> "(" <lista_expr> ")"
-            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_CLOSE);
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LIST);
-            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_OPEN);
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_OUTPUT_KEYWORD);
+            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE);
+            parser_stack_push_non_terminal(p, NT_EXPR_LIST);
+            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN);
+            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT_KEYWORD);
         } break;
         case GR_28: { // <cmd_saida_tipo> ::= write
-            parser_stack_push_token(&p->stack, C_TOKEN_WRITE);
+            parser_stack_push_token(p, C_TOKEN_WRITE);
         } break;
         case GR_29: { // <cmd_saida_tipo> ::= writeln
-            parser_stack_push_token(&p->stack, C_TOKEN_WRITELN);
+            parser_stack_push_token(p, C_TOKEN_WRITELN);
         } break;
         case GR_30: { // <lista_expr> ::= <expr> <lista_expr_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LIST_R);
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
+            parser_stack_push_non_terminal(p, NT_EXPR_LIST_R);
+            parser_stack_push_non_terminal(p, NT_EXPR);
         } break;
         case GR_31: { // <lista_expr_mul> ::= "," <lista_expr>
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LIST);
-            parser_stack_push_token(&p->stack, C_TOKEN_COMMA);
+            parser_stack_push_non_terminal(p, NT_EXPR_LIST);
+            parser_stack_push_token(p, C_TOKEN_COMMA);
         } break;
         case GR_32: { // <lista_expr_mul> ::= î
         } break;
         case GR_33: { // <cmd_sel> ::= if <expr> <lista_cmd> <elif> <else> end
-            parser_stack_push_token(&p->stack, C_TOKEN_END);
-            parser_stack_push_non_terminal(&p->stack, NT_ELSE);
-            parser_stack_push_non_terminal(&p->stack, NT_ELIF);
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
-            parser_stack_push_token(&p->stack, C_TOKEN_IF);
+            parser_stack_push_token(p, C_TOKEN_END);
+            parser_stack_push_non_terminal(p, NT_ELSE);
+            parser_stack_push_non_terminal(p, NT_ELIF);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST);
+            parser_stack_push_non_terminal(p, NT_EXPR);
+            parser_stack_push_token(p, C_TOKEN_IF);
         } break;
         case GR_34: { // <elif> ::= elif <expr> <lista_cmd> <elif>
-            parser_stack_push_non_terminal(&p->stack, NT_ELIF);
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
-            parser_stack_push_token(&p->stack, C_TOKEN_ELIF);
+            parser_stack_push_non_terminal(p, NT_ELIF);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST);
+            parser_stack_push_non_terminal(p, NT_EXPR);
+            parser_stack_push_token(p, C_TOKEN_ELIF);
         } break;
         case GR_35: { // <elif> ::= î
         } break;
         case GR_36: { // <else> ::= else <lista_cmd>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
-            parser_stack_push_token(&p->stack, C_TOKEN_ELSE);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST);
+            parser_stack_push_token(p, C_TOKEN_ELSE);
         } break;
         case GR_37: { // <else> ::= î
         } break;
         case GR_38: { // <lista_cmd> ::= <cmd> ";" <lista_cmd_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST_R);
-            parser_stack_push_token(&p->stack, C_TOKEN_SEMICOLON);
-            parser_stack_push_non_terminal(&p->stack, NT_CMD);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST_R);
+            parser_stack_push_token(p, C_TOKEN_SEMICOLON);
+            parser_stack_push_non_terminal(p, NT_CMD);
         } break;
         case GR_39: { // <lista_cmd_mul> ::= <lista_cmd>
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST);
         } break;
         case GR_40: { // <lista_cmd_mul> ::= î
         } break;
         case GR_41: { // <cmd_rep> ::= repeat <lista_cmd> <cmd_rep_tipo> <expr>
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LOOP_KEYWORD);
-            parser_stack_push_non_terminal(&p->stack, NT_CMD_LIST);
-            parser_stack_push_token(&p->stack, C_TOKEN_REPEAT);
+            parser_stack_push_non_terminal(p, NT_EXPR);
+            parser_stack_push_non_terminal(p, NT_CMD_LOOP_KEYWORD);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST);
+            parser_stack_push_token(p, C_TOKEN_REPEAT);
         } break;
         case GR_42: { // <cmd_rep_tipo> ::= while
-            parser_stack_push_token(&p->stack, C_TOKEN_WHILE);
+            parser_stack_push_token(p, C_TOKEN_WHILE);
         } break;
         case GR_43: { // <cmd_rep_tipo> ::= until
-            parser_stack_push_token(&p->stack, C_TOKEN_UNTIL);
+            parser_stack_push_token(p, C_TOKEN_UNTIL);
         } break;
         case GR_44: { // <expr> ::= <elemento> <expr_log>
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LOG);
-            parser_stack_push_non_terminal(&p->stack, NT_ELEMENT);
+            parser_stack_push_non_terminal(p, NT_EXPR_LOG);
+            parser_stack_push_non_terminal(p, NT_ELEMENT);
         } break;
         case GR_45: { // <expr_log> ::= "&&" <elemento> <expr_log>
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LOG);
-            parser_stack_push_non_terminal(&p->stack, NT_ELEMENT);
-            parser_stack_push_token(&p->stack, C_TOKEN_AND);
+            parser_stack_push_non_terminal(p, NT_EXPR_LOG);
+            parser_stack_push_non_terminal(p, NT_ELEMENT);
+            parser_stack_push_token(p, C_TOKEN_AND);
         } break;
         case GR_46: { // <expr_log> ::= "||" <elemento> <expr_log>
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR_LOG);
-            parser_stack_push_non_terminal(&p->stack, NT_ELEMENT);
-            parser_stack_push_token(&p->stack, C_TOKEN_OR);
+            parser_stack_push_non_terminal(p, NT_EXPR_LOG);
+            parser_stack_push_non_terminal(p, NT_ELEMENT);
+            parser_stack_push_token(p, C_TOKEN_OR);
         } break;
         case GR_47: { // <expr_log> ::= î
         } break;
         case GR_48: { // <elemento> ::= <relacional>
-            parser_stack_push_non_terminal(&p->stack, NT_RELATIONAL);
+            parser_stack_push_non_terminal(p, NT_RELATIONAL);
         } break;
         case GR_49: { // <elemento> ::= true
-            parser_stack_push_token(&p->stack, C_TOKEN_TRUE);
+            parser_stack_push_token(p, C_TOKEN_TRUE);
         } break;
         case GR_50: { // <elemento> ::= false
-            parser_stack_push_token(&p->stack, C_TOKEN_FALSE);
+            parser_stack_push_token(p, C_TOKEN_FALSE);
         } break;
         case GR_51: { // <elemento> ::= "!" <elemento>
-            parser_stack_push_non_terminal(&p->stack, NT_ELEMENT);
-            parser_stack_push_token(&p->stack, C_TOKEN_NOT);
+            parser_stack_push_non_terminal(p, NT_ELEMENT);
+            parser_stack_push_token(p, C_TOKEN_NOT);
         } break;
         case GR_52: { // <relacional> ::= <aritmetica> <relacional_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_RELATIONAL_R);
-            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC);
+            parser_stack_push_non_terminal(p, NT_RELATIONAL_R);
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC);
         } break;
         case GR_53: { // <relacional_mul> ::= <operador_relacional> <aritmetica>
-            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC);
-            parser_stack_push_non_terminal(&p->stack, NT_RELATIONAL_OP);
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC);
+            parser_stack_push_non_terminal(p, NT_RELATIONAL_OP);
         } break;
         case GR_54: { // <relacional_mul> ::= î
         } break;
         case GR_55: { // <operador_relacional> ::= "=="
-            parser_stack_push_token(&p->stack, C_TOKEN_CMP_EQ);
+            parser_stack_push_token(p, C_TOKEN_CMP_EQ);
         } break;
         case GR_56: { // <operador_relacional> ::= "!="
-            parser_stack_push_token(&p->stack, C_TOKEN_CMP_NE);
+            parser_stack_push_token(p, C_TOKEN_CMP_NE);
         } break;
         case GR_57: { // <operador_relacional> ::= "<"
-            parser_stack_push_token(&p->stack, C_TOKEN_CMP_LT);
+            parser_stack_push_token(p, C_TOKEN_CMP_LT);
         } break;
         case GR_58: { // <operador_relacional> ::= ">"
-            parser_stack_push_token(&p->stack, C_TOKEN_CMP_GT);
+            parser_stack_push_token(p, C_TOKEN_CMP_GT);
         } break;
         case GR_59: { // <aritmetica> ::= <termo> <aritmetica_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC_R);
-            parser_stack_push_non_terminal(&p->stack, NT_TERM);
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R);
+            parser_stack_push_non_terminal(p, NT_TERM);
         } break;
         case GR_60: { // <aritmetica_mul> ::= "+" <termo> <aritmetica_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC_R);
-            parser_stack_push_non_terminal(&p->stack, NT_TERM);
-            parser_stack_push_token(&p->stack, C_TOKEN_ADD);
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R);
+            parser_stack_push_non_terminal(p, NT_TERM);
+            parser_stack_push_token(p, C_TOKEN_ADD);
         } break;
         case GR_61: { // <aritmetica_mul> ::= "-" <termo> <aritmetica_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_ARITHMETIC_R);
-            parser_stack_push_non_terminal(&p->stack, NT_TERM);
-            parser_stack_push_token(&p->stack, C_TOKEN_SUB);
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R);
+            parser_stack_push_non_terminal(p, NT_TERM);
+            parser_stack_push_token(p, C_TOKEN_SUB);
         } break;
         case GR_62: { // <aritmetica_mul> ::= î
         } break;
         case GR_63: { // <termo> ::= <fator> <termo_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_TERM_R);
-            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
+            parser_stack_push_non_terminal(p, NT_TERM_R);
+            parser_stack_push_non_terminal(p, NT_FACTOR);
         } break;
         case GR_64: { // <termo_mul> ::= "*" <fator> <termo_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_TERM_R);
-            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
-            parser_stack_push_token(&p->stack, C_TOKEN_MUL);
+            parser_stack_push_non_terminal(p, NT_TERM_R);
+            parser_stack_push_non_terminal(p, NT_FACTOR);
+            parser_stack_push_token(p, C_TOKEN_MUL);
         } break;
         case GR_65: { // <termo_mul> ::= "/" <fator> <termo_mul>
-            parser_stack_push_non_terminal(&p->stack, NT_TERM_R);
-            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
-            parser_stack_push_token(&p->stack, C_TOKEN_DIV);
+            parser_stack_push_non_terminal(p, NT_TERM_R);
+            parser_stack_push_non_terminal(p, NT_FACTOR);
+            parser_stack_push_token(p, C_TOKEN_DIV);
         } break;
         case GR_66: { // <termo_mul> ::= î
         } break;
         case GR_67: {  // <fator> ::= identificador
-            parser_stack_push_token(&p->stack, C_TOKEN_IDENT);
+            parser_stack_push_token(p, C_TOKEN_IDENT);
         } break;
         case GR_68: {  // <fator> ::= constante_int
-            parser_stack_push_token(&p->stack, C_TOKEN_INTEGER);
+            parser_stack_push_token(p, C_TOKEN_INTEGER);
         } break;
         case GR_69: {  // <fator> ::= constante_float
-            parser_stack_push_token(&p->stack, C_TOKEN_FLOAT);
+            parser_stack_push_token(p, C_TOKEN_FLOAT);
         } break;
         case GR_70: { // <fator> ::= constante_string
-            parser_stack_push_token(&p->stack, C_TOKEN_STRING);
+            parser_stack_push_token(p, C_TOKEN_STRING);
         } break;
         case GR_71: { // <fator> ::= "(" <expr> ")"
-            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_CLOSE);
-            parser_stack_push_non_terminal(&p->stack, NT_EXPR);
-            parser_stack_push_token(&p->stack, C_TOKEN_PAREN_OPEN);
+            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE);
+            parser_stack_push_non_terminal(p, NT_EXPR);
+            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN);
         } break;
         case GR_72: { // <fator> ::= "+" <fator>
-            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
-            parser_stack_push_token(&p->stack, C_TOKEN_ADD);
+            parser_stack_push_non_terminal(p, NT_FACTOR);
+            parser_stack_push_token(p, C_TOKEN_ADD);
         } break;
         case GR_73: { // <fator> ::= "-" <fator>
-            parser_stack_push_non_terminal(&p->stack, NT_FACTOR);
-            parser_stack_push_token(&p->stack, C_TOKEN_SUB);
+            parser_stack_push_non_terminal(p, NT_FACTOR);
+            parser_stack_push_token(p, C_TOKEN_SUB);
         } break;
         default: {
             // TODO(cya): panic here
