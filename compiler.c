@@ -6,7 +6,7 @@ typedef CyStringView String;
 /* ---------------------------- Tokenizer ----------------------------------- */
 #define TOKEN_KINDS \
     TOKEN_KIND(C_TOKEN_INVALID, "símbolo inválido"), \
-    TOKEN_KIND(C_TOKEN_EOF, "$"), \
+    TOKEN_KIND(C_TOKEN_EOF, "EOF"), \
 \
 TOKEN_KIND(C_TOKEN__LITERAL_BEGIN, ""), \
     TOKEN_KIND(C_TOKEN_IDENT, "identificador"), \
@@ -173,13 +173,14 @@ static isize keyword_map_lookup(KeywordMap *map, String key)
     return map->data[idx];
 }
 
-static const Utf8AcceptRange g_utf8_accept_ranges[] = {
-    {0x80, 0xBF},
-    {0xA0, 0xBF},
-    {0x80, 0x9F},
-    {0x90, 0xBF},
-    {0x80, 0x8F},
-};
+// TODO(cya): implement this business (prob inside cy.h)
+// static const Utf8AcceptRange g_utf8_accept_ranges[] = {
+//     {0x80, 0xBF},
+//     {0xA0, 0xBF},
+//     {0x80, 0x9F},
+//     {0x90, 0xBF},
+//     {0x80, 0x8F},
+// };
 
 static isize utf8_decode(String str, Rune *rune_out)
 {
@@ -766,7 +767,7 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     }
 
     CyString msg = cy_string_create_reserve(a, 0x40);
-    msg = cy_string_append_fmt(msg, "linha %td: ", t->bad_tok.pos.line);
+    msg = cy_string_append_fmt(msg, "Erro na linha %td: ", t->bad_tok.pos.line);
 
     TokenizerError err = t->err;
     if (err != T_ERR_INVALID_STRING && err != T_ERR_INVALID_COMMENT) {
@@ -806,8 +807,6 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 }
 
 /* ----------------------------- Parser ------------------------------------- */
-// TODO(cya): change these strings to useful descriptions so we can plug them
-// into the error messages
 #define NON_TERMINALS \
     NON_TERMINAL(NT_START, "<main>"), \
 \
@@ -870,7 +869,7 @@ const String g_non_terminal_strings[] = {
 #undef NON_TERMINAL
 };
 
-static inline String non_terminal_string(NonTerminal n)
+static inline String non_terminal_name(NonTerminal n)
 {
     if (n < 0 || n >= NT_COUNT) {
         return cy_string_view_create_c("<ERRO>");
@@ -1019,7 +1018,7 @@ static GrammarRule g_ll1_table[NT_COUNT][LL1_COL_COUNT] = {
         [29] = GR_3, [30] = GR_2,
     },
     {
-        [0] = GR_4, [21] = GR_5, [24] = GR_6, [25] = GR_6, [26] = GR_3,
+        [0] = GR_4, [21] = GR_5, [24] = GR_6, [25] = GR_6, [26] = GR_8,
         [30] = GR_7,
     },
     { [0] = GR_9, },
@@ -1113,13 +1112,12 @@ typedef enum {
     P_ERR_INVALID_RULE,
 } ParserErrorKind;
 
-typedef enum {
-    AST_KIND_TOKEN,
-    AST_KIND_NON_TERMINAL,
-} AstItemKind;
 
 typedef struct {
-    AstItemKind kind;
+    enum {
+        AST_KIND_TOKEN,
+        AST_KIND_NON_TERMINAL,
+    } kind;
     union {
         Token token;
         NonTerminal non_terminal;
@@ -1253,7 +1251,7 @@ static CyString reachable_terminals(CyAllocator a, NonTerminal n)
 static CyString parser_create_error_msg(CyAllocator a, Parser *p)
 {
     CyString msg = cy_string_create_reserve(a, 0x100);
-    msg = cy_string_append_fmt(msg, "linha %td: ", p->read_tok->pos.line);
+    msg = cy_string_append_fmt(msg, "Erro na linha %td: ", p->read_tok->pos.line);
 
     String found = p->err.found.str;
     String found_kind = string_from_token_kind(p->err.found.kind);
@@ -1271,7 +1269,7 @@ static CyString parser_create_error_msg(CyAllocator a, Parser *p)
     }
 
     msg = cy_string_append_fmt(
-        msg, "esperava %.*s, encontrou %.*s",
+        msg, "esperado %.*s, encontrado %.*s",
         expected.len, expected.text,
         found_kind.len, found_kind.text
     );
