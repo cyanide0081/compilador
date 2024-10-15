@@ -477,6 +477,7 @@ CY_DEF void cy__string_set_cap(CyString str, isize cap);
 CY_DEF CyString cy_string_create_reserve(CyAllocator a, isize cap);
 CY_DEF CyString cy_string_create_len(CyAllocator a, const char *str, isize len);
 CY_DEF CyString cy_string_create(CyAllocator a, const char *str);
+CY_DEF CyString cy_string_create_view(CyAllocator a, CyStringView str);
 CY_DEF CyString cy_string_reserve_space_for(CyString str, isize extra_len);
 CY_DEF CyString cy_string_shrink(CyString str);
 CY_DEF void cy_string_free(CyString str);
@@ -1547,6 +1548,11 @@ CyString cy_string_create_len(CyAllocator a, const char *str, isize len)
 CyString cy_string_create(CyAllocator a, const char *str)
 {
     return cy_string_create_len(a, str, cy_str_len(str));
+}
+
+inline CyString cy_string_create_view(CyAllocator a, CyStringView str)
+{
+    return cy_string_create_len(a, (const char*)str.text, str.len);
 }
 
 void cy_string_free(CyString str)

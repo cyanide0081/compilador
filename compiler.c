@@ -367,6 +367,11 @@ static inline String string_from_token_kind(TokenKind kind)
     return g_token_strings[kind];
 }
 
+static inline CyString cy_string_from_token_kind(CyAllocator a, TokenKind kind)
+{
+    return cy_string_create_view(a, string_from_token_kind(kind));
+}
+
 static inline TokenKind token_kind_from_string(String str)
 {
     for (isize i = 0; i < C_TOKEN_COUNT; i++) {
@@ -684,81 +689,83 @@ static TokenList tokenize(CyAllocator a, Tokenizer *t, b32 ignore_comments)
     return list;
 }
 
-// static int int_to_utf8(isize n, isize max_digits, char *buf, isize cap)
-// {
-//     isize dividend = 10;
-//     isize digits = 1;
-//     while (n % dividend != n) {
-//         dividend *= 10;
-//         digits += 1;
-//     }
+#if 0
+static int int_to_utf8(isize n, isize max_digits, char *buf, isize cap)
+{
+    isize dividend = 10;
+    isize digits = 1;
+    while (n % dividend != n) {
+        dividend *= 10;
+        digits += 1;
+    }
 
-//     while (digits > max_digits) {
-//         dividend /= 10;
-//         n %= dividend;
-//         digits -= 1;
-//     }
+    while (digits > max_digits) {
+        dividend /= 10;
+        n %= dividend;
+        digits -= 1;
+    }
 
-//     for (isize i = 0; i < digits && i < cap; i++) {
-//         dividend /= 10;
-//         buf[i] = '0' + n / dividend;
-//         n %= dividend;
-//     }
+    for (isize i = 0; i < digits && i < cap; i++) {
+        dividend /= 10;
+        buf[i] = '0' + n / dividend;
+        n %= dividend;
+    }
 
-//     buf[cap] = '\0';
-//     return digits;
-// }
+    buf[cap] = '\0';
+    return digits;
+}
 
-// static CyString append_token_info(
-//     CyString str, String line,
-//     String kind, String token
-// ) {
-//     CyAllocator a = CY_STRING_HEADER(str)->alloc;
-//     CyString new_line = cy_string_create_reserve(a, 0x20);
-//     new_line = cy_string_append_view(new_line, line);
-//     new_line = cy_string_pad_right(new_line, 10, ' ');
+static CyString append_token_info(
+    CyString str, String line,
+    String kind, String token
+) {
+    CyAllocator a = CY_STRING_HEADER(str)->alloc;
+    CyString new_line = cy_string_create_reserve(a, 0x20);
+    new_line = cy_string_append_view(new_line, line);
+    new_line = cy_string_pad_right(new_line, 10, ' ');
 
-//     // TODO(cya): replace with utf8_width
-//     isize col_width = cy_utf8_codepoints(new_line) + 22;
-//     new_line = cy_string_append_view(new_line, kind);
-//     new_line = cy_string_pad_right(new_line, col_width, ' ');
+    // TODO(cya): replace with utf8_width
+    isize col_width = cy_utf8_codepoints(new_line) + 22;
+    new_line = cy_string_append_view(new_line, kind);
+    new_line = cy_string_pad_right(new_line, col_width, ' ');
 
-//     new_line = cy_string_append_view(new_line, token);
-//     str = cy_string_append(str, new_line);
+    new_line = cy_string_append_view(new_line, token);
+    str = cy_string_append(str, new_line);
 
-//     cy_string_free(new_line);
-//     return str;
-// }
+    cy_string_free(new_line);
+    return str;
+}
 
 #define LINE_NUM_MAX_DIGITS 9
 
-// static CyString append_tokens_fmt(CyString str, const TokenList *l)
-// {
-//     str = append_token_info(
-//         str,
-//         cy_string_view_create_c("linha"),
-//         cy_string_view_create_c("classe"),
-//         cy_string_view_create_c("lexema")
-//     );
-//     for (isize i = 0; i < l->len; i++) {
-//         Token *t = &l->arr[i];
+static CyString append_tokens_fmt(CyString str, const TokenList *l)
+{
+    str = append_token_info(
+        str,
+        cy_string_view_create_c("linha"),
+        cy_string_view_create_c("classe"),
+        cy_string_view_create_c("lexema")
+    );
+    for (isize i = 0; i < l->len; i++) {
+        Token *t = &l->arr[i];
 
-//         char line_buf[LINE_NUM_MAX_DIGITS + 1];
-//         isize line_buf_cap = CY_STATIC_STR_LEN(line_buf);
-//         isize line_buf_len = int_to_utf8(
-//             t->pos.line, line_buf_cap, line_buf, line_buf_cap
-//         );
+        char line_buf[LINE_NUM_MAX_DIGITS + 1];
+        isize line_buf_cap = CY_STATIC_STR_LEN(line_buf);
+        isize line_buf_len = int_to_utf8(
+            t->pos.line, line_buf_cap, line_buf, line_buf_cap
+        );
 
-//         String line = cy_string_view_create_len(line_buf, line_buf_len);
-//         String token_kind = string_from_token_kind(t->kind);
-//         String token = t->str;
+        String line = cy_string_view_create_len(line_buf, line_buf_len);
+        String token_kind = string_from_token_kind(t->kind);
+        String token = t->str;
 
-//         str = cy_string_append_c(str, "\r\n");
-//         str = append_token_info(str, line, token_kind, token);
-//     }
+        str = cy_string_append_c(str, "\r\n");
+        str = append_token_info(str, line, token_kind, token);
+    }
 
-//     return str;
-// }
+    return str;
+}
+#endif
 
 static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 {
@@ -767,7 +774,7 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     }
 
     CyString msg = cy_string_create_reserve(a, 0x40);
-    msg = cy_string_append_fmt(msg, "Erro na linha %td: ", t->bad_tok.pos.line);
+    msg = cy_string_append_fmt(msg, "Erro na linha %td – ", t->bad_tok.pos.line);
 
     TokenizerError err = t->err;
     if (err != T_ERR_INVALID_STRING && err != T_ERR_INVALID_COMMENT) {
@@ -829,8 +836,6 @@ NON_TERMINAL(NT__COMMAND_BEGIN, ""), \
     NON_TERMINAL(NT_STRING_OPT, "<cte_str_opt>"), \
     NON_TERMINAL(NT_CMD_OUTPUT, "<cmd_saida>"), \
     NON_TERMINAL(NT_CMD_OUTPUT_KEYWORD, "<cmd_saida_tipo>"), \
-    NON_TERMINAL(NT_EXPR_LIST, "<lista_expr>"), \
-    NON_TERMINAL(NT_EXPR_LIST_R, "<lista_expr_mul>"), \
     NON_TERMINAL(NT_CMD_COND, "<cmd_sel>"), \
     NON_TERMINAL(NT_ELIF, "<elif>"), \
     NON_TERMINAL(NT_ELSE, "<else>"), \
@@ -841,6 +846,8 @@ NON_TERMINAL(NT__COMMAND_BEGIN, ""), \
 NON_TERMINAL(NT__COMMAND_END, ""), \
 \
 NON_TERMINAL(NT__EXPRESSION_BEGIN, ""), \
+    NON_TERMINAL(NT_EXPR_LIST, "<lista_expr>"), \
+    NON_TERMINAL(NT_EXPR_LIST_R, "<lista_expr_mul>"), \
     NON_TERMINAL(NT_EXPR, "<expr>"), \
     NON_TERMINAL(NT_EXPR_LOG, "<expr_log>"), \
     NON_TERMINAL(NT_ELEMENT, "<elemento>"), \
@@ -878,25 +885,12 @@ static inline String non_terminal_name(NonTerminal n)
     return g_non_terminal_strings[n];
 }
 
-static inline String non_terminal_description(NonTerminal n)
-{
-    const char *desc = NULL;
-    if (NT_IS_OF_CLASS(n, INSTRUCTION)) {
-        desc = "instrução";
-    } else if (NT_IS_OF_CLASS(n, COMMAND)) {
-        desc = "comando";
-    } else if (NT_IS_OF_CLASS(n, EXPRESSION)) {
-        desc = "expressão";
-    } else switch (n) {
-    case NT_START: {
-        desc = "ponto de entrada";
-    } break;
-    default: {
-        desc = "(erro)";
-    } break;
-    }
+static inline CyString reachable_terminals(CyAllocator a, NonTerminal n);
 
-    return cy_string_view_create_c(desc);
+static inline CyString non_terminal_description(CyAllocator a, NonTerminal n)
+{
+    return (NT_IS_OF_CLASS(n, EXPRESSION)) ? 
+        cy_string_create(a, "expressão") : reachable_terminals(a, n);
 }
 
 typedef enum {
@@ -1226,8 +1220,6 @@ static inline void parser_error(Parser *p, ParserErrorKind kind)
 static CyString reachable_terminals(CyAllocator a, NonTerminal n)
 {
     CyString str = cy_string_create_reserve(a, 0x20);
-    str = cy_string_append_rune(str, '[');
-
     GrammarRule *ll1_row = g_ll1_table[n];
     for (isize i = 0; i < LL1_COL_COUNT; i++) {
         if (ll1_row[i] == GR_NONE) {
@@ -1236,12 +1228,11 @@ static CyString reachable_terminals(CyAllocator a, NonTerminal n)
 
         TokenKind kind = g_ll1_kind_from_col[i];
         String s = g_token_strings[kind];
-        str = cy_string_append_fmt(str, "`%.*s`, ", s.len, s.text);
+        str = cy_string_append_fmt(str, "%.*s ", s.len, s.text);
     }
 
     int len = cy_string_len(str);
     str[len - 1] = '\0';
-    str[len - 2] = ']';
     cy__string_set_len(str, len - 1);
     str = cy_string_shrink(str);
 
@@ -1251,32 +1242,40 @@ static CyString reachable_terminals(CyAllocator a, NonTerminal n)
 static CyString parser_create_error_msg(CyAllocator a, Parser *p)
 {
     CyString msg = cy_string_create_reserve(a, 0x100);
-    msg = cy_string_append_fmt(msg, "Erro na linha %td: ", p->read_tok->pos.line);
+    msg = cy_string_append_fmt(
+        msg, "Erro na linha %td – ", p->read_tok->pos.line
+    );
 
-    String found = p->err.found.str;
-    String found_kind = string_from_token_kind(p->err.found.kind);
-    String expected = {0};
-    switch (p->err.expected.kind) {
+    Token found = p->err.found;
+    String found_str;
+    switch (found.kind) {
+    case C_TOKEN_EOF:
+    case C_TOKEN_STRING: {
+        found_str = g_token_strings[found.kind];
+    } break;
+    default: {
+        found_str = found.str;
+    } break;
+    }
+    
+    AstItem expected = p->err.expected;
+    CyString expected_str = NULL;
+    switch (expected.kind) {
     case AST_KIND_TOKEN: {
-        expected = p->err.expected.u.token.str;
+        expected_str = cy_string_from_token_kind(a, expected.u.token.kind);
     } break;
     case AST_KIND_NON_TERMINAL: {
-        // expected = cy_string_view_create(
-        //     reachable_terminals(a, p->err.expected.u.non_terminal)
-        // );
-        expected = non_terminal_description(p->err.expected.u.non_terminal);
+        expected_str = non_terminal_description(a, expected.u.non_terminal);
     } break;
     }
 
     msg = cy_string_append_fmt(
-        msg, "esperado %.*s, encontrado %.*s",
-        expected.len, expected.text,
-        found_kind.len, found_kind.text
+        msg, "encontrado %.*s esperado %s",
+        found_str.len, found_str.text,
+        expected_str
     );
-    if (found.len > 0) {
-        msg = cy_string_append_fmt(msg, " (`%.*s`)", found.len, found.text);
-    }
-
+    cy_string_free(expected_str);
+    
     msg = cy_string_shrink(msg);
     return msg;
 }
@@ -1613,7 +1612,7 @@ static Ast parse(CyAllocator a, Parser *p)
         } break;
         default: {
             // TODO(cya): panic here
-            parser_error(p, P_ERR_INVALID_RULE);
+            // parser_error(p, P_ERR_INVALID_RULE);
             return ast;
         } break;
         }
