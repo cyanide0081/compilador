@@ -767,6 +767,11 @@ static CyString append_tokens_fmt(CyString str, const TokenList *l)
 }
 #endif
 
+static inline CyString append_error_prefix(CyString str, TokenPos err_pos)
+{
+    return cy_string_append_fmt(str, "Erro na linha %td – ", err_pos.line);
+}
+
 static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
 {
     if (t->err == T_ERR_OUT_OF_MEMORY) {
@@ -774,7 +779,7 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     }
 
     CyString msg = cy_string_create_reserve(a, 0x40);
-    msg = cy_string_append_fmt(msg, "Erro na linha %td – ", t->bad_tok.pos.line);
+    msg = append_error_prefix(msg, t->bad_tok.pos);
 
     TokenizerError err = t->err;
     if (err != T_ERR_INVALID_STRING && err != T_ERR_INVALID_COMMENT) {
@@ -889,7 +894,7 @@ static inline CyString reachable_terminals(CyAllocator a, NonTerminal n);
 
 static inline CyString non_terminal_description(CyAllocator a, NonTerminal n)
 {
-    return (NT_IS_OF_CLASS(n, EXPRESSION)) ? 
+    return (NT_IS_OF_CLASS(n, EXPRESSION)) ?
         cy_string_create(a, "expressão") : reachable_terminals(a, n);
 }
 
@@ -905,6 +910,8 @@ typedef enum {
 } GrammarRule;
 
 CY_STATIC_ASSERT(GR_COUNT == 74 + 1);
+
+#define RULE_IS_INVALID(r) (r <= GR_NONE || r >= GR_COUNT)
 
 #define LL1_ROWS \
     LL1_ROW(NT_START, 0), \
@@ -1109,36 +1116,112 @@ typedef enum {
 
 typedef struct {
     enum {
-        AST_KIND_TOKEN,
-        AST_KIND_NON_TERMINAL,
+        PARSER_KIND_TOKEN,
+        PARSER_KIND_NON_TERMINAL,
     } kind;
     union {
         Token token;
         NonTerminal non_terminal;
     } u;
-} AstItem;
-
-typedef struct AstNode {
-    AstItem item;
-    struct AstNode **children;
-    isize child_count;
-} AstNode;
+} ParserSymbol;
 
 typedef struct {
     CyAllocator alloc;
-    AstNode *root;
-} Ast;
-
-typedef struct {
-    CyAllocator alloc;
-    AstItem *items;
+    ParserSymbol *items;
     isize len;
     isize cap;
 } ParserStack;
 
+#define AST_KINDS \
+    AST_KIND(MAIN, struct { \
+        Ast *body; \
+    }), \
+    AST_KIND(IDENT_LIST, struct { \
+        Token ident; \
+        Ast *next; \
+    }), \
+    AST_KIND(ASSIGN, struct { \
+        Ast *expr; \
+    }), \
+    AST_KIND(DEC_STMT, struct { \
+        Ast *idents; \
+        Ast *expr; \
+    }), \
+    AST_KIND(READ_STMT, struct { \
+        Ast *args; \
+    }), \
+    AST_KIND(INPUT_LIST, struct { \
+        Ast *string_opt; \
+        Token ident; \
+        Ast *next; \
+    }), \
+    AST_KIND(STRING_OPT, struct { \
+        Token string; \
+    }), \
+    AST_KIND(WRITE_STMT, struct { \
+        Token keyword; \
+        Ast *args; \
+    }), \
+    AST_KIND(EXPR_LIST, struct { \
+        Ast *expr; \
+        Ast *next; \
+    }), \
+    AST_KIND(IF_STMT, struct { \
+        Ast *cond; \
+        Ast *body; \
+        Ast *else; \
+    }), \
+    AST_KIND(STMT_LIST, struct { \
+        Ast *stmt; \
+        Ast *next; \
+    }), \
+    AST_KIND(REPEAT_STMT, struct { \
+        Ast *body; \
+        Token label; \
+        Ast *expr; \
+    }), \
+    AST_KIND(BINARY_EXPR, struct { \
+        Token op; \
+        Ast *left; \
+        Ast *right; \
+    }), \
+    AST_KIND(UNARY_EXPR, struct { \
+        Token op; \
+        Ast *expr; \
+    }), \
+    AST_KIND(PAREN_EXPR, struct { \
+        Token open; \
+        Ast *expr; \
+        Token close; \
+    }), \
+    AST_KIND(INT, isize lit), \
+    AST_KIND(FLOAT, f64 lit), \
+    AST_KIND(STRING, f64 lit), \
+    AST_KIND(BOOL, b8 lit), \
+
+typedef struct Ast Ast;
+struct Ast {
+    enum {
+        AST_MAIN,
+    } kind;
+    union {
+        struct {
+            Token tok_main;
+            Ast *instr_list;
+            Token tok_end;
+        } main;
+
+    } u;
+};
+
+// typedef struct {
+//     CyAllocator alloc;
+//     AstNode *root;
+// } Ast;
+
 typedef struct {
     ParserErrorKind kind;
-    AstItem expected;
+    ParserSymbol expected;
     Token found;
 } ParserError;
 
@@ -1153,12 +1236,12 @@ typedef struct {
 static inline void parser_error(Parser *p, ParserErrorKind kind);
 
 // TODO(cya): we could probably just use the stack allocator for this
-static inline void parser_stack_push(Parser *p, AstItem item)
+static inline void parser_stack_push(Parser *p, ParserSymbol item)
 {
     if (p->stack.len == p->stack.cap) {
         isize old_size = p->stack.cap * sizeof(*p->stack.items);
         isize new_size = old_size * 2;
-        AstItem *items = cy_default_resize_align(
+        ParserSymbol *items = cy_default_resize_align(
             p->stack.alloc, p->stack.items,
             old_size, new_size,
             PARSER_STACK_ALIGN
@@ -1177,16 +1260,16 @@ static inline void parser_stack_push(Parser *p, AstItem item)
 
 static inline void parser_stack_push_token(Parser *p, TokenKind kind)
 {
-    parser_stack_push(p, (AstItem){
-        .kind = AST_KIND_TOKEN,
+    parser_stack_push(p, (ParserSymbol){
+        .kind = PARSER_KIND_TOKEN,
         .u.token = (Token){.kind = kind, .str = g_token_strings[kind]},
     });
 }
 
 static inline void parser_stack_push_non_terminal(Parser *p, NonTerminal n)
 {
-    parser_stack_push(p, (AstItem){
-        .kind = AST_KIND_NON_TERMINAL,
+    parser_stack_push(p, (ParserSymbol){
+        .kind = PARSER_KIND_NON_TERMINAL,
         .u.non_terminal = n,
     });
 }
@@ -1194,11 +1277,11 @@ static inline void parser_stack_push_non_terminal(Parser *p, NonTerminal n)
 static inline void parser_stack_pop(Parser *p)
 {
     if (p->stack.len > 0) {
-        p->stack.items[--p->stack.len] = (AstItem){0};
+        p->stack.items[--p->stack.len] = (ParserSymbol){0};
     }
 }
 
-static inline AstItem *parser_stack_peek(Parser *p)
+static inline ParserSymbol *parser_stack_peek(Parser *p)
 {
     CY_VALIDATE_PTR(p);
     return (p->stack.len > 0) ? &p->stack.items[p->stack.len - 1] : NULL;
@@ -1220,7 +1303,8 @@ static inline void parser_error(Parser *p, ParserErrorKind kind)
 static CyString reachable_terminals(CyAllocator a, NonTerminal n)
 {
     CyString str = cy_string_create_reserve(a, 0x20);
-    GrammarRule *ll1_row = g_ll1_table[n];
+    u8 table_row = g_ll1_row_from_kind[n];
+    GrammarRule *ll1_row = g_ll1_table[table_row];
     for (isize i = 0; i < LL1_COL_COUNT; i++) {
         if (ll1_row[i] == GR_NONE) {
             continue;
@@ -1242,9 +1326,7 @@ static CyString reachable_terminals(CyAllocator a, NonTerminal n)
 static CyString parser_create_error_msg(CyAllocator a, Parser *p)
 {
     CyString msg = cy_string_create_reserve(a, 0x100);
-    msg = cy_string_append_fmt(
-        msg, "Erro na linha %td – ", p->read_tok->pos.line
-    );
+    msg = append_error_prefix(msg, p->err.found.pos);
 
     Token found = p->err.found;
     String found_str;
@@ -1257,14 +1339,14 @@ static CyString parser_create_error_msg(CyAllocator a, Parser *p)
         found_str = found.str;
     } break;
     }
-    
-    AstItem expected = p->err.expected;
+
+    ParserSymbol expected = p->err.expected;
     CyString expected_str = NULL;
     switch (expected.kind) {
-    case AST_KIND_TOKEN: {
+    case PARSER_KIND_TOKEN: {
         expected_str = cy_string_from_token_kind(a, expected.u.token.kind);
     } break;
-    case AST_KIND_NON_TERMINAL: {
+    case PARSER_KIND_NON_TERMINAL: {
         expected_str = non_terminal_description(a, expected.u.non_terminal);
     } break;
     }
@@ -1275,7 +1357,7 @@ static CyString parser_create_error_msg(CyAllocator a, Parser *p)
         expected_str
     );
     cy_string_free(expected_str);
-    
+
     msg = cy_string_shrink(msg);
     return msg;
 }
@@ -1283,7 +1365,7 @@ static CyString parser_create_error_msg(CyAllocator a, Parser *p)
 // NOTE(cya): must pass a stack allocator!
 static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
 {
-    AstItem *items = NULL;
+    ParserSymbol *items = NULL;
     isize cap = CY_MAX(l->len, 0x10);
     isize size = cap * sizeof(*items);
     items = cy_alloc_align(stack_allocator, size, PARSER_STACK_ALIGN);
@@ -1308,6 +1390,7 @@ static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
 static Ast parse(CyAllocator a, Parser *p)
 {
     CY_UNUSED(a);
+
     // TODO(cya): build AST
     Ast ast = {0};
 
@@ -1316,10 +1399,11 @@ static Ast parse(CyAllocator a, Parser *p)
             break;
         } else if (p->read_tok->kind == C_TOKEN_COMMENT) {
             p->read_tok += 1;
+            continue;
         }
 
-        AstItem *stack_top = parser_stack_peek(p);
-        if (stack_top->kind == AST_KIND_TOKEN) {
+        ParserSymbol *stack_top = parser_stack_peek(p);
+        if (stack_top->kind == PARSER_KIND_TOKEN) {
             TokenKind kind = stack_top->u.token.kind;
             if (kind != p->read_tok->kind) {
                 parser_error(p, P_ERR_UNEXPECTED_TOKEN);
@@ -1336,7 +1420,7 @@ static Ast parse(CyAllocator a, Parser *p)
         u8 table_row = g_ll1_row_from_kind[stack_top->u.non_terminal];
         u8 table_col = g_ll1_col_from_kind[p->read_tok->kind];
         GrammarRule rule = g_ll1_table[table_row][table_col];
-        if (rule == GR_NONE) {
+        if (RULE_IS_INVALID(rule)) {
             parser_error(p, P_ERR_INVALID_RULE);
             break;
         }
@@ -1611,9 +1695,6 @@ static Ast parse(CyAllocator a, Parser *p)
             parser_stack_push_token(p, C_TOKEN_SUB);
         } break;
         default: {
-            // TODO(cya): panic here
-            // parser_error(p, P_ERR_INVALID_RULE);
-            return ast;
         } break;
         }
     }
@@ -1623,11 +1704,12 @@ static Ast parse(CyAllocator a, Parser *p)
 
 CyString compile(String src_code)
 {
+#ifdef CY_DEBUG
     LARGE_INTEGER perf_freq;
     QueryPerformanceFrequency(&perf_freq);
     LARGE_INTEGER start_counter;
     QueryPerformanceCounter(&start_counter);
-    // CyCounter start_counter = cy_counter_query();
+#endif
 
     CyArena tokenizer_arena = cy_arena_init(cy_heap_allocator(), 0x4000);
     CyAllocator temp_allocator = cy_arena_allocator(&tokenizer_arena);
@@ -1640,7 +1722,7 @@ CyString compile(String src_code)
         return tokenizer_create_error_msg(heap_allocator, &t);
     }
 
-    isize stack_size = token_list.len * sizeof(AstItem);
+    isize stack_size = token_list.len * sizeof(ParserSymbol);
     CyStack parser_stack = cy_stack_init(heap_allocator, stack_size);
     CyAllocator stack_allocator = cy_stack_allocator(&parser_stack);
     Parser p = parser_init(stack_allocator, &token_list);
@@ -1649,20 +1731,21 @@ CyString compile(String src_code)
         return parser_create_error_msg(heap_allocator, &p);
     }
 
-    CY_UNUSED(a);
+    CY_UNUSED(a); // TODO(cya): remove when ast is done
 
-    // CyCounter end_counter = cy_counter_query();
-    // f64 elapsed_us = cy_counter_to_us(end_counter - start_counter);
+    isize init_cap = 0x100;
+    CyString output = cy_string_create_reserve(heap_allocator, init_cap);
+    output = cy_string_append_fmt(output, "programa compilado com sucesso");
+
+#ifdef CY_DEBUG
     LARGE_INTEGER end_counter;
     QueryPerformanceCounter(&end_counter);
     f64 elapsed_us = (end_counter.QuadPart - start_counter.QuadPart) *
         1000000.0 / perf_freq.QuadPart;
 
-    isize init_cap = 0x100;
-    CyString output = cy_string_create_reserve(heap_allocator, init_cap);
-    output = cy_string_append_fmt(
-        output, "análise sintática completada em %.01fμs", elapsed_us
-    );
+    output = cy_string_append_fmt(output, " em %.01fμs", elapsed_us);
+#endif
+
     output = cy_string_shrink(output);
 
     cy_stack_deinit(&parser_stack);

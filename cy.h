@@ -1387,24 +1387,26 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
 
 /* ------------------------- Pool Allocator Section ------------------------- */
 
-// inline CyPool cy_pool_init(
-//     void *backing_buf, isize size, isize chunk_size, isize chunk_align
-// ) {
-//     u8 *start = backing_buf;
-//     u8 *aligned_start = cy_align_ptr_forward(backing_buf, chunk_align);
-//     isize backing_buf_size = aligned_start - start;
+#if 0
+inline CyPool cy_pool_init(
+    void *backing_buf, isize size, isize chunk_size, isize chunk_align
+) {
+    u8 *start = backing_buf;
+    u8 *aligned_start = cy_align_ptr_forward(backing_buf, chunk_align);
+    isize backing_buf_size = aligned_start - start;
 
-//     return (CyPool){
-//         .buf = aligned_start,
-//         .len = backing_buf_size,
-//         .chunk_size = 0,
-//     };
-// }
+    return (CyPool){
+        .buf = aligned_start,
+        .len = backing_buf_size,
+        .chunk_size = 0,
+    };
+}
 
-// CY_ALLOCATOR_PROC(cy_pool_allocator_proc)
-// {
-//     return NULL;
-// }
+CY_ALLOCATOR_PROC(cy_pool_allocator_proc)
+{
+    return NULL;
+}
+#endif
 
 /* ============================== Char procs =============================== */
 const char *cy_char_first_occurence(const char *str, char c)
@@ -1887,6 +1889,7 @@ b32 cy_string_view_contains(CyStringView str, const char *char_set)
 }
 
 /* ============================ Unicode helpers ============================= */
+#if 0
 static u8 cy__utf8_class_table[32] = {
     0, 0, 0, 0, // 0 = 0xxxx
     0, 0, 0, 0, // 1 = 10xxx
@@ -1898,15 +1901,16 @@ static u8 cy__utf8_class_table[32] = {
     3, 3, 4, 5,
 };
 
-// isize cy_utf8_encode_rune(u8 buf[4], Rune r)
-// {
-//     return 0;
-// }
+isize cy_utf8_encode_rune(u8 buf[4], Rune r)
+{
+    return 0;
+}
 
-// isize cy_utf8_decode(const u8 *str, Rune *codepoint_out)
-// {
-//     return 0;
-// }
+isize cy_utf8_decode(const u8 *str, Rune *codepoint_out)
+{
+    return 0;
+}
+#endif
 
 inline isize cy_utf8_codepoints(const char *str)
 {
