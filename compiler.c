@@ -1149,8 +1149,11 @@ typedef struct {
         Token *idents; \
         isize len; \
     }) \
-    AST_KIND(DEF_STMT, DefStmt, struct { \
-        AstNode *idents; \
+    AST_KIND(VAR_DECL, VarDecl, struct { \
+        AstNode *ident_list; \
+    }) \
+    AST_KIND(ASSIGN_STMT, AssignStmt, struct { \
+        AstNode *ident_list; \
         AstNode *expr; \
     }) \
     AST_KIND(READ_STMT, ReadStmt, struct { \
@@ -1222,6 +1225,10 @@ struct AstNode {
 };
 
 #define AST_NODE_ALLOC(alloc, _kind) cy_alloc(alloc, (sizeof(Ast##_kind)))
+#define AST_NODE_ALLOC_ITEM(alloc, node, _kind) cy_resize( \
+    alloc, node, node->u._kind.len++ * sizeof(*node), \
+    node->u._kind.len * sizeof(*node) \
+)
 
 typedef struct {
     CyAllocator alloc;
@@ -1411,13 +1418,12 @@ static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
     return p;
 }
 
-#if 0
 static void parser_add_ast_node(Parser *p);
-#endif
     
 static Ast parse(CyAllocator a, Parser *p)
 {
     Ast ast = { .alloc = a };
+    p->ast = &ast;
 
     for (;;) {
         if (p->err.kind != P_ERR_NONE) {
@@ -1450,9 +1456,7 @@ static Ast parse(CyAllocator a, Parser *p)
             break;
         }
 
-#if 0
-        parser_stack_top_to_ast_node(p);
-#endif
+        parser_add_ast_node(p);
         parser_stack_pop(p);
         switch (rule) {
         case GR_0: {  // <inicio> ::= main <lista_instr> end
@@ -1731,27 +1735,29 @@ static Ast parse(CyAllocator a, Parser *p)
 }
 
 // TODO(cya): implement ast generation here
-#if 0
 static inline void parser_add_ast_node(Parser *p)
 {
     CyAllocator a = p->ast->alloc;
-    AstNode *node = NULL;
+    AstNode *cur = p->ast_cur;
+    AstNode *new = NULL;
     ParserSymbol *top = parser_stack_peek(p);
     switch (top->kind) {
     case PARSER_KIND_NON_TERMINAL: {
         switch (top->u.non_terminal) {
         case NT_START: {
-            node = AST_NODE_ALLOC(a, Main);
-            p->ast_cur = node;
-            p->ast->root = node;
+            new = AST_NODE_ALLOC(a, Main);
+            new->kind = AST_MAIN;
+            cur = new;
+            p->ast->root = new;
         } break;
         case NT_INSTR_LIST: {
-            node = AST_NODE_ALLOC(a, StmtList);
-            // node->u.
-            p->ast_cur->u.Main.body = node;
+            new = AST_NODE_ALLOC(a, StmtList);
+            new->kind = AST_STMT_LIST;
+            cur->u.Main.body = new;
         } break;
         case NT_INSTR_LIST_R: {
-        
+            cur = AST_NODE_ALLOC_ITEM(a, cur, StmtList);
+            new->kind = AST_STMT_LIST;
         } break;
         case NT_INSTRUCTION: {
         
@@ -1859,8 +1865,9 @@ static inline void parser_add_ast_node(Parser *p)
         
     } break;
     }
+
+    p->ast_cur = cur;
 }
-#endif
 
 CyString compile(String src_code)
 {
