@@ -1286,7 +1286,7 @@ static inline void parser_stack_push_non_terminal(Parser *p, NonTerminal n)
 
 static inline void parser_stack_pop(Parser *p)
 {
-    if (p->stack.len > 0) {
+    if (p->stack.len <= 0) {
         return;
     }
     
@@ -1357,7 +1357,11 @@ static CyString parser_create_error_msg(CyAllocator a, Parser *p)
     CyString expected_str = NULL;
     switch (expected.kind) {
     case PARSER_KIND_TOKEN: {
-        expected_str = cy_string_from_token_kind(a, expected.u.token.kind);
+        if (expected.u.token.kind == C_TOKEN_STRING) {
+            expected_str = cy_string_from_token_kind(a, expected.u.token.kind);
+        } else {
+            expected_str = cy_string_create_view(a, expected.u.token.str);
+        }
     } break;
     case PARSER_KIND_NON_TERMINAL: {
         expected_str = non_terminal_description(a, expected.u.non_terminal);
@@ -1437,7 +1441,9 @@ static Ast parse(CyAllocator a, Parser *p)
             break;
         }
 
+#if 0
         parser_stack_top_to_ast_node(p);
+#endif
         parser_stack_pop(p);
         switch (rule) {
         case GR_0: {  // <inicio> ::= main <lista_instr> end
@@ -1715,6 +1721,8 @@ static Ast parse(CyAllocator a, Parser *p)
     return ast;
 }
 
+#if 0
+// TODO(cya): oh boy
 static inline void parser_stack_top_to_ast_node(Parser *p)
 {
     CyAllocator a = p->ast->alloc;
@@ -1843,6 +1851,7 @@ static inline void parser_stack_top_to_ast_node(Parser *p)
     } break;
     }
 }
+#endif
 
 CyString compile(String src_code)
 {
