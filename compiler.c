@@ -955,7 +955,7 @@ CY_STATIC_ASSERT(GR_COUNT == 74 + 1);
 
 #define LL1_ROW_COUNT 36
 
-static u8 g_ll1_row_from_kind[] = {
+static u8 g_ll1_row_from_kind[NT_COUNT] = {
 #define LL1_ROW(n, r) [n] = r
     LL1_ROWS
 #undef LL1_ROW
@@ -995,8 +995,9 @@ static u8 g_ll1_row_from_kind[] = {
     LL1_COL(C_TOKEN_REPEAT, 30), \
     LL1_COL(C_TOKEN_WHILE, 31), \
     LL1_COL(C_TOKEN_UNTIL, 32), \
+    LL1_COL(C_TOKEN_EOF, 33), \
 
-#define LL1_COL_COUNT 33
+#define LL1_COL_COUNT 34
 
 static u8 g_ll1_col_from_kind[] = {
 #define LL1_COL(k, c) [k] = c
@@ -1010,7 +1011,7 @@ static u8 g_ll1_kind_from_col[] = {
 #undef LL1_COL
 };
 
-static GrammarRule g_ll1_table[NT_COUNT][LL1_COL_COUNT] = {
+static GrammarRule g_ll1_table[LL1_ROW_COUNT][LL1_COL_COUNT] = {
     { [20] = GR_0, },
     {
         [0] = GR_1, [21] = GR_1, [24] = GR_1, [25] = GR_1, [26] = GR_1,
@@ -1220,7 +1221,7 @@ struct AstNode {
     } u;
 };
 
-#define AST_ALLOC_NODE(alloc, _kind) (AstNode*)(cy_alloc(alloc, (sizeof(Ast##_kind))))
+#define AST_NODE_ALLOC(alloc, _kind) cy_alloc(alloc, (sizeof(Ast##_kind)))
 
 typedef struct {
     CyAllocator alloc;
@@ -1357,10 +1358,16 @@ static CyString parser_create_error_msg(CyAllocator a, Parser *p)
     CyString expected_str = NULL;
     switch (expected.kind) {
     case PARSER_KIND_TOKEN: {
-        if (expected.u.token.kind == C_TOKEN_STRING) {
+        switch (expected.u.token.kind) {
+        case C_TOKEN_IDENT:
+        case C_TOKEN_INTEGER:
+        case C_TOKEN_FLOAT:
+        case C_TOKEN_STRING: {
             expected_str = cy_string_from_token_kind(a, expected.u.token.kind);
-        } else {
+        } break;
+        default: {
             expected_str = cy_string_create_view(a, expected.u.token.str);
+        } break;
         }
     } break;
     case PARSER_KIND_NON_TERMINAL: {
@@ -1404,7 +1411,9 @@ static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
     return p;
 }
 
-static void parser_stack_top_to_ast_node(Parser *p);
+#if 0
+static void parser_add_ast_node(Parser *p);
+#endif
     
 static Ast parse(CyAllocator a, Parser *p)
 {
@@ -1721,9 +1730,9 @@ static Ast parse(CyAllocator a, Parser *p)
     return ast;
 }
 
+// TODO(cya): implement ast generation here
 #if 0
-// TODO(cya): oh boy
-static inline void parser_stack_top_to_ast_node(Parser *p)
+static inline void parser_add_ast_node(Parser *p)
 {
     CyAllocator a = p->ast->alloc;
     AstNode *node = NULL;
@@ -1732,12 +1741,12 @@ static inline void parser_stack_top_to_ast_node(Parser *p)
     case PARSER_KIND_NON_TERMINAL: {
         switch (top->u.non_terminal) {
         case NT_START: {
-            node = AST_ALLOC_NODE(a, Main);
+            node = AST_NODE_ALLOC(a, Main);
             p->ast_cur = node;
             p->ast->root = node;
         } break;
         case NT_INSTR_LIST: {
-            node = AST_ALLOC_NODE(a, StmtList);
+            node = AST_NODE_ALLOC(a, StmtList);
             // node->u.
             p->ast_cur->u.Main.body = node;
         } break;
@@ -1882,7 +1891,7 @@ CyString compile(String src_code)
         return parser_create_error_msg(heap_allocator, &p);
     }
 
-    CY_UNUSED(a); // TODO(cya): remove when ast is done
+    CY_UNUSED(a); // TODO(cya): remove when the ast is implemented
 
     isize init_cap = 0x100;
     CyString output = cy_string_create_reserve(heap_allocator, init_cap);
