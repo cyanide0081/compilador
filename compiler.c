@@ -173,14 +173,16 @@ static isize keyword_map_lookup(KeywordMap *map, String key)
     return map->data[idx];
 }
 
+#if 0
 // TODO(cya): implement this business (prob inside cy.h)
-// static const Utf8AcceptRange g_utf8_accept_ranges[] = {
-//     {0x80, 0xBF},
-//     {0xA0, 0xBF},
-//     {0x80, 0x9F},
-//     {0x90, 0xBF},
-//     {0x80, 0x8F},
-// };
+static const Utf8AcceptRange g_utf8_accept_ranges[] = {
+    {0x80, 0xBF},
+    {0xA0, 0xBF},
+    {0x80, 0x9F},
+    {0x90, 0xBF},
+    {0x80, 0x8F},
+};
+#endif
 
 static isize utf8_decode(String str, Rune *rune_out)
 {
@@ -1133,91 +1135,97 @@ typedef struct {
 } ParserStack;
 
 #define AST_KINDS \
-    AST_KIND(MAIN, struct { \
-        Ast *body; \
-    }), \
-    AST_KIND(IDENT_LIST, struct { \
+    AST_KIND(IDENT, Ident, struct { \
+        Token tok; \
+    }) \
+    AST_KIND(LITERAL, Literal, struct { \
+        Token tok; \
+    }) \
+    AST_KIND(MAIN, Main, struct { \
+        AstNode *body; \
+    }) \
+    AST_KIND(IDENT_LIST, IdentList, struct { \
+        Token *idents; \
+        isize len; \
+    }) \
+    AST_KIND(DEF_STMT, DefStmt, struct { \
+        AstNode *idents; \
+        AstNode *expr; \
+    }) \
+    AST_KIND(READ_STMT, ReadStmt, struct { \
+        AstNode *args; \
+    }) \
+    AST_KIND(INPUT_LIST, InputList, struct { \
+        AstNode *string_opt; \
         Token ident; \
-        Ast *next; \
-    }), \
-    AST_KIND(ASSIGN, struct { \
-        Ast *expr; \
-    }), \
-    AST_KIND(DEC_STMT, struct { \
-        Ast *idents; \
-        Ast *expr; \
-    }), \
-    AST_KIND(READ_STMT, struct { \
-        Ast *args; \
-    }), \
-    AST_KIND(INPUT_LIST, struct { \
-        Ast *string_opt; \
-        Token ident; \
-        Ast *next; \
-    }), \
-    AST_KIND(STRING_OPT, struct { \
+        AstNode *next; \
+    }) \
+    AST_KIND(STRING_OPT, StringOpt, struct { \
         Token string; \
-    }), \
-    AST_KIND(WRITE_STMT, struct { \
+    }) \
+    AST_KIND(WRITE_STMT, WriteStmt, struct { \
         Token keyword; \
-        Ast *args; \
-    }), \
-    AST_KIND(EXPR_LIST, struct { \
-        Ast *expr; \
-        Ast *next; \
-    }), \
-    AST_KIND(IF_STMT, struct { \
-        Ast *cond; \
-        Ast *body; \
-        Ast *else; \
-    }), \
-    AST_KIND(STMT_LIST, struct { \
-        Ast *stmt; \
-        Ast *next; \
-    }), \
-    AST_KIND(REPEAT_STMT, struct { \
-        Ast *body; \
+        AstNode *args; \
+    }) \
+    AST_KIND(EXPR_LIST, ExprList, struct { \
+        AstNode *exprs; \
+        isize len; \
+    }) \
+    AST_KIND(IF_STMT, IfStmt, struct { \
+        AstNode *cond; \
+        AstNode *body; \
+        AstNode *else_stmt; \
+    }) \
+    AST_KIND(STMT_LIST, StmtList, struct { \
+        AstNode **stmts; \
+        isize len; \
+    }) \
+    AST_KIND(REPEAT_STMT, RepeatStmt, struct { \
+        AstNode *body; \
         Token label; \
-        Ast *expr; \
-    }), \
-    AST_KIND(BINARY_EXPR, struct { \
+        AstNode *expr; \
+    }) \
+    AST_KIND(BINARY_EXPR, BinaryExpr, struct { \
         Token op; \
-        Ast *left; \
-        Ast *right; \
-    }), \
-    AST_KIND(UNARY_EXPR, struct { \
+        AstNode *left; \
+        AstNode *right; \
+    }) \
+    AST_KIND(UNARY_EXPR, UnaryExpr, struct { \
         Token op; \
-        Ast *expr; \
-    }), \
-    AST_KIND(PAREN_EXPR, struct { \
+        AstNode *expr; \
+    }) \
+    AST_KIND(PAREN_EXPR, ParenExpr, struct { \
         Token open; \
-        Ast *expr; \
+        AstNode *expr; \
         Token close; \
-    }), \
-    AST_KIND(INT, isize lit), \
-    AST_KIND(FLOAT, f64 lit), \
-    AST_KIND(STRING, f64 lit), \
-    AST_KIND(BOOL, b8 lit), \
+    }) \
+    
+typedef enum {
+#define AST_KIND(e, ...) AST_##e,
+    AST_KINDS
+#undef AST_KIND
+} AstKind;
+    
+typedef struct AstNode AstNode;
+#define AST_KIND(e, t, s) typedef s Ast##t;
+    AST_KINDS
+#undef AST_KIND
 
-typedef struct Ast Ast;
-struct Ast {
-    enum {
-        AST_MAIN,
-    } kind;
+struct AstNode {
+    AstKind kind;
     union {
-        struct {
-            Token tok_main;
-            Ast *instr_list;
-            Token tok_end;
-        } main;
-
+#define AST_KIND(e, t, ...) Ast##t t;
+        AST_KINDS
+#undef AST_KIND
     } u;
 };
 
-// typedef struct {
-//     CyAllocator alloc;
-//     AstNode *root;
-// } Ast;
+#define AST_ALLOC_NODE(alloc, _kind) (AstNode*)(cy_alloc(alloc, (sizeof(Ast##_kind))))
+
+typedef struct {
+    CyAllocator alloc;
+    AstNode *root;
+} Ast;
 
 typedef struct {
     ParserErrorKind kind;
@@ -1228,6 +1236,8 @@ typedef struct {
 typedef struct {
     Token *read_tok;
     ParserStack stack;
+    Ast *ast;
+    AstNode *ast_cur;
     ParserError err;
 } Parser;
 
@@ -1277,8 +1287,11 @@ static inline void parser_stack_push_non_terminal(Parser *p, NonTerminal n)
 static inline void parser_stack_pop(Parser *p)
 {
     if (p->stack.len > 0) {
-        p->stack.items[--p->stack.len] = (ParserSymbol){0};
+        return;
     }
+    
+    ParserSymbol *top = &p->stack.items[--p->stack.len];
+    cy_mem_set(top, 0, sizeof(*top));
 }
 
 static inline ParserSymbol *parser_stack_peek(Parser *p)
@@ -1387,12 +1400,11 @@ static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
     return p;
 }
 
+static void parser_stack_top_to_ast_node(Parser *p);
+    
 static Ast parse(CyAllocator a, Parser *p)
 {
-    CY_UNUSED(a);
-
-    // TODO(cya): build AST
-    Ast ast = {0};
+    Ast ast = { .alloc = a };
 
     for (;;) {
         if (p->err.kind != P_ERR_NONE) {
@@ -1425,6 +1437,7 @@ static Ast parse(CyAllocator a, Parser *p)
             break;
         }
 
+        parser_stack_top_to_ast_node(p);
         parser_stack_pop(p);
         switch (rule) {
         case GR_0: {  // <inicio> ::= main <lista_instr> end
@@ -1700,6 +1713,135 @@ static Ast parse(CyAllocator a, Parser *p)
     }
 
     return ast;
+}
+
+static inline void parser_stack_top_to_ast_node(Parser *p)
+{
+    CyAllocator a = p->ast->alloc;
+    AstNode *node = NULL;
+    ParserSymbol *top = parser_stack_peek(p);
+    switch (top->kind) {
+    case PARSER_KIND_NON_TERMINAL: {
+        switch (top->u.non_terminal) {
+        case NT_START: {
+            node = AST_ALLOC_NODE(a, Main);
+            p->ast_cur = node;
+            p->ast->root = node;
+        } break;
+        case NT_INSTR_LIST: {
+            node = AST_ALLOC_NODE(a, StmtList);
+            // node->u.
+            p->ast_cur->u.Main.body = node;
+        } break;
+        case NT_INSTR_LIST_R: {
+        
+        } break;
+        case NT_INSTRUCTION: {
+        
+        } break;
+        case NT_DEC_OR_ASSIGN: {
+        
+        } break;
+        case NT_ASSIGN_OPT: {
+        
+        } break;
+        case NT_ID_LIST: {
+        
+        } break;
+        case NT_ID_LIST_R: {
+        
+        } break;
+        case NT_CMD: {
+        
+        } break;
+        case NT_CMD_ASSIGN: {
+        
+        } break;
+        case NT_CMD_INPUT: {
+        
+        } break;
+        case NT_INPUT_LIST: {
+        
+        } break;
+        case NT_INPUT_LIST_R: {
+        
+        } break;
+        case NT_STRING_OPT: {
+        
+        } break;
+        case NT_CMD_OUTPUT: {
+        
+        } break;
+        case NT_CMD_OUTPUT_KEYWORD: {
+        
+        } break;
+        case NT_CMD_COND: {
+        
+        } break;
+        case NT_ELIF: {
+        
+        } break;
+        case NT_ELSE: {
+        
+        } break;
+        case NT_CMD_LIST: {
+        
+        } break;
+        case NT_CMD_LIST_R: {
+        
+        } break;
+        case NT_CMD_LOOP: {
+        
+        } break;
+        case NT_CMD_LOOP_KEYWORD: {
+        
+        } break;
+        case NT_EXPR_LIST: {
+        
+        } break;
+        case NT_EXPR_LIST_R: {
+        
+        } break;
+        case NT_EXPR: {
+        
+        } break;
+        case NT_EXPR_LOG: {
+        
+        } break;
+        case NT_ELEMENT: {
+        
+        } break;
+        case NT_RELATIONAL: {
+        
+        } break;
+        case NT_RELATIONAL_R: {
+        
+        } break;
+        case NT_RELATIONAL_OP: {
+        
+        } break;
+        case NT_ARITHMETIC: {
+        
+        } break;
+        case NT_ARITHMETIC_R: {
+        
+        } break;
+        case NT_TERM: {
+        
+        } break;
+        case NT_TERM_R: {
+        
+        } break;
+        case NT_FACTOR: {
+        
+        } break;
+        default: break;
+    }
+    } break;
+    case PARSER_KIND_TOKEN: {
+        
+    } break;
+    }
 }
 
 CyString compile(String src_code)
