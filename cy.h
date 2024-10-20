@@ -239,6 +239,19 @@ CY_DEF usize cy_calc_header_padding(
     uintptr ptr, usize align, usize header_size
 );
 
+typedef struct CyTicks CyTicks;
+
+typedef enum {
+    CY_SECONDS = 1ULL,
+    CY_MILISECONDS = 1000ULL,
+    CY_MICROSECONDS = 1000000ULL,
+    CY_NANOSECONDS = 1000000000ULL,
+} CyTimeUnit;
+
+CY_DEF CyTicks cy_ticks_query(void);
+CY_DEF CyTicks cy_ticks_elapsed(CyTicks start, CyTicks end);
+CY_DEF f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit);
+
 /* =============================== Allocators =============================== */
 typedef enum {
     CY_ALLOCATION_ALLOC,
@@ -624,6 +637,56 @@ inline usize cy_calc_header_padding(uintptr ptr, usize align, usize header_size)
     }
 
     return (usize)padding;
+}
+
+#ifndef CY_OS_WINDOWS
+    #include <time.h>
+#endif
+struct CyTicks {
+#if defined(CY_OS_WINDOWS)
+    LARGE_INTEGER counter;
+#else
+    struct timespec counter;
+#endif
+};
+
+CyTicks cy_ticks_query(void)
+{
+    CyTicks ticks;
+#if defined(CY_OS_WINDOWS)
+    QueryPerformanceCounter(&ticks.counter);
+#else
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ticks.counter);
+#endif
+
+    return ticks;
+}
+
+inline CyTicks cy_ticks_elapsed(CyTicks start, CyTicks end)
+{
+    return (CyTicks){
+#if defined(CY_OS_WINDOWS)
+        .counter.QuadPart = end.counter.QuadPart - start.counter.QuadPart,
+#else
+        .counter.tv_sec = end.counter.tv_sec - start.counter.tv_sec,
+        .counter.tv_nsec = end.counter.tv_nsec - start.counter.tv_nsec,
+#endif
+    };
+}
+
+inline f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit)
+{
+#if defined(CY_OS_WINDOWS)
+    static LARGE_INTEGER perf_freq;
+    if (perf_freq.QuadPart == 0) {
+        QueryPerformanceFrequency(&perf_freq);
+    }
+
+    return (f64)ticks.counter.QuadPart * unit / perf_freq.QuadPart;
+#else
+    return (f64)ticks.counter.tv_sec * unit +
+        ticks.counter.tv_nsec / (1.0e9 / unit);
+#endif
 }
 
 /* =============================== Allocators =============================== */

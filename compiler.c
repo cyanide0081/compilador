@@ -1757,7 +1757,7 @@ static inline void parser_add_ast_node(Parser *p)
         } break;
         case NT_INSTR_LIST_R: {
             cur = AST_NODE_ALLOC_ITEM(a, cur, StmtList);
-            new->kind = AST_STMT_LIST;
+            cur->kind = AST_STMT_LIST;
         } break;
         case NT_INSTRUCTION: {
         
@@ -1872,10 +1872,7 @@ static inline void parser_add_ast_node(Parser *p)
 CyString compile(String src_code)
 {
 #ifdef CY_DEBUG
-    LARGE_INTEGER perf_freq;
-    QueryPerformanceFrequency(&perf_freq);
-    LARGE_INTEGER start_counter;
-    QueryPerformanceCounter(&start_counter);
+    CyTicks start = cy_ticks_query();
 #endif
 
     CyArena tokenizer_arena = cy_arena_init(cy_heap_allocator(), 0x4000);
@@ -1902,14 +1899,11 @@ CyString compile(String src_code)
 
     isize init_cap = 0x100;
     CyString output = cy_string_create_reserve(heap_allocator, init_cap);
-    output = cy_string_append_fmt(output, "programa compilado com sucesso");
+    output = cy_string_append_c(output, "programa compilado com sucesso");
 
 #ifdef CY_DEBUG
-    LARGE_INTEGER end_counter;
-    QueryPerformanceCounter(&end_counter);
-    f64 elapsed_us = (end_counter.QuadPart - start_counter.QuadPart) *
-        1000000.0 / perf_freq.QuadPart;
-
+    CyTicks elapsed = cy_ticks_elapsed(start, cy_ticks_query());
+    f64 elapsed_us = cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS);
     output = cy_string_append_fmt(output, " em %.01fμs", elapsed_us);
 #endif
 
