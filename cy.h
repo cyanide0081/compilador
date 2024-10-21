@@ -642,6 +642,7 @@ inline usize cy_calc_header_padding(uintptr ptr, usize align, usize header_size)
 #ifndef CY_OS_WINDOWS
     #include <time.h>
 #endif
+
 struct CyTicks {
 #if defined(CY_OS_WINDOWS)
     LARGE_INTEGER counter;

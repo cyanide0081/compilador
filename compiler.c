@@ -1203,13 +1203,14 @@ typedef struct {
         AstNode *expr; \
         Token close; \
     }) \
-    
+    AST_KIND(KIND_COUNT, KindCount, isize)
+
 typedef enum {
 #define AST_KIND(e, ...) AST_##e,
     AST_KINDS
 #undef AST_KIND
 } AstKind;
-    
+
 typedef struct AstNode AstNode;
 #define AST_KIND(e, t, s) typedef s Ast##t;
     AST_KINDS
@@ -1224,7 +1225,7 @@ struct AstNode {
     } u;
 };
 
-#define AST_NODE_ALLOC(alloc, _kind) cy_alloc(alloc, (sizeof(Ast##_kind)))
+#define AST_NODE_ALLOC(alloc, _kind) cy_alloc(alloc, (sizeof(AstNode)))
 #define AST_NODE_ALLOC_ITEM(alloc, node, _kind) cy_resize( \
     alloc, node, node->u._kind.len++ * sizeof(*node), \
     node->u._kind.len * sizeof(*node) \
@@ -1297,7 +1298,7 @@ static inline void parser_stack_pop(Parser *p)
     if (p->stack.len <= 0) {
         return;
     }
-    
+
     ParserSymbol *top = &p->stack.items[--p->stack.len];
     cy_mem_set(top, 0, sizeof(*top));
 }
@@ -1418,8 +1419,9 @@ static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
     return p;
 }
 
-static void parser_add_ast_node(Parser *p);
-    
+static void parser_add_ast_node_from_non_terminal(Parser *p);
+static void parser_add_ast_node_from_token(Parser *p);
+
 static Ast parse(CyAllocator a, Parser *p)
 {
     Ast ast = { .alloc = a };
@@ -1443,6 +1445,7 @@ static Ast parse(CyAllocator a, Parser *p)
                 break;
             }
 
+            parser_add_ast_node_from_token(p);
             parser_stack_pop(p);
             p->read_tok += 1;
             continue;
@@ -1456,7 +1459,7 @@ static Ast parse(CyAllocator a, Parser *p)
             break;
         }
 
-        parser_add_ast_node(p);
+        parser_add_ast_node_from_non_terminal(p);
         parser_stack_pop(p);
         switch (rule) {
         case GR_0: {  // <inicio> ::= main <lista_instr> end
@@ -1734,139 +1737,148 @@ static Ast parse(CyAllocator a, Parser *p)
     return ast;
 }
 
-// TODO(cya): implement ast generation here
-static inline void parser_add_ast_node(Parser *p)
+static inline void parser_add_ast_node_from_non_terminal(Parser *p)
 {
     CyAllocator a = p->ast->alloc;
     AstNode *cur = p->ast_cur;
     AstNode *new = NULL;
     ParserSymbol *top = parser_stack_peek(p);
-    switch (top->kind) {
-    case PARSER_KIND_NON_TERMINAL: {
-        switch (top->u.non_terminal) {
-        case NT_START: {
-            new = AST_NODE_ALLOC(a, Main);
-            new->kind = AST_MAIN;
-            cur = new;
-            p->ast->root = new;
-        } break;
-        case NT_INSTR_LIST: {
-            new = AST_NODE_ALLOC(a, StmtList);
-            new->kind = AST_STMT_LIST;
-            cur->u.Main.body = new;
-        } break;
-        case NT_INSTR_LIST_R: {
-            cur = AST_NODE_ALLOC_ITEM(a, cur, StmtList);
-            cur->kind = AST_STMT_LIST;
-        } break;
-        case NT_INSTRUCTION: {
-        
-        } break;
-        case NT_DEC_OR_ASSIGN: {
-        
-        } break;
-        case NT_ASSIGN_OPT: {
-        
-        } break;
-        case NT_ID_LIST: {
-        
-        } break;
-        case NT_ID_LIST_R: {
-        
-        } break;
-        case NT_CMD: {
-        
-        } break;
-        case NT_CMD_ASSIGN: {
-        
-        } break;
-        case NT_CMD_INPUT: {
-        
-        } break;
-        case NT_INPUT_LIST: {
-        
-        } break;
-        case NT_INPUT_LIST_R: {
-        
-        } break;
-        case NT_STRING_OPT: {
-        
-        } break;
-        case NT_CMD_OUTPUT: {
-        
-        } break;
-        case NT_CMD_OUTPUT_KEYWORD: {
-        
-        } break;
-        case NT_CMD_COND: {
-        
-        } break;
-        case NT_ELIF: {
-        
-        } break;
-        case NT_ELSE: {
-        
-        } break;
-        case NT_CMD_LIST: {
-        
-        } break;
-        case NT_CMD_LIST_R: {
-        
-        } break;
-        case NT_CMD_LOOP: {
-        
-        } break;
-        case NT_CMD_LOOP_KEYWORD: {
-        
-        } break;
-        case NT_EXPR_LIST: {
-        
-        } break;
-        case NT_EXPR_LIST_R: {
-        
-        } break;
-        case NT_EXPR: {
-        
-        } break;
-        case NT_EXPR_LOG: {
-        
-        } break;
-        case NT_ELEMENT: {
-        
-        } break;
-        case NT_RELATIONAL: {
-        
-        } break;
-        case NT_RELATIONAL_R: {
-        
-        } break;
-        case NT_RELATIONAL_OP: {
-        
-        } break;
-        case NT_ARITHMETIC: {
-        
-        } break;
-        case NT_ARITHMETIC_R: {
-        
-        } break;
-        case NT_TERM: {
-        
-        } break;
-        case NT_TERM_R: {
-        
-        } break;
-        case NT_FACTOR: {
-        
-        } break;
-        default: break;
-    }
+    switch (top->u.non_terminal) {
+    case NT_START: {
+        new = AST_NODE_ALLOC(a, Main);
+        new->kind = AST_MAIN;
+        cur = new;
+        p->ast->root = new;
     } break;
-    case PARSER_KIND_TOKEN: {
-        
+    case NT_INSTR_LIST: {
+        CY_ASSERT(cur->kind == AST_MAIN);
+
+        new = AST_NODE_ALLOC(a, StmtList);
+        new->kind = AST_STMT_LIST;
+        new->u.StmtList.stmts[0] = AST_NODE_ALLOC_ITEM(a, NULL, StmtList);
+
+        cur->u.Main.body = new;
+        cur = new;
     } break;
+    case NT_INSTR_LIST_R: {
+        CY_ASSERT(cur->kind == AST_STMT_LIST);
+
+        cur = AST_NODE_ALLOC_ITEM(a, cur, StmtList);
+    } break;
+    case NT_INSTRUCTION: {
+        CY_ASSERT(cur->kind == AST_STMT_LIST);
+    } break;
+    case NT_DEC_OR_ASSIGN: {
+        CY_ASSERT(cur->kind == AST_STMT_LIST);
+
+        new = AST_NODE_ALLOC(a, VarDecl);
+        new->kind = AST_VAR_DECL;
+
+        isize last = cur->u.StmtList.len - 1;
+        cur->u.StmtList.stmts[last] = new;
+    } break;
+    case NT_ASSIGN_OPT: {
+
+    } break;
+    case NT_ID_LIST: {
+
+    } break;
+    case NT_ID_LIST_R: {
+
+    } break;
+    case NT_CMD: {
+
+    } break;
+    case NT_CMD_ASSIGN: {
+
+    } break;
+    case NT_CMD_INPUT: {
+
+    } break;
+    case NT_INPUT_LIST: {
+
+    } break;
+    case NT_INPUT_LIST_R: {
+
+    } break;
+    case NT_STRING_OPT: {
+
+    } break;
+    case NT_CMD_OUTPUT: {
+
+    } break;
+    case NT_CMD_OUTPUT_KEYWORD: {
+
+    } break;
+    case NT_CMD_COND: {
+
+    } break;
+    case NT_ELIF: {
+
+    } break;
+    case NT_ELSE: {
+
+    } break;
+    case NT_CMD_LIST: {
+
+    } break;
+    case NT_CMD_LIST_R: {
+
+    } break;
+    case NT_CMD_LOOP: {
+
+    } break;
+    case NT_CMD_LOOP_KEYWORD: {
+
+    } break;
+    case NT_EXPR_LIST: {
+
+    } break;
+    case NT_EXPR_LIST_R: {
+
+    } break;
+    case NT_EXPR: {
+
+    } break;
+    case NT_EXPR_LOG: {
+
+    } break;
+    case NT_ELEMENT: {
+
+    } break;
+    case NT_RELATIONAL: {
+
+    } break;
+    case NT_RELATIONAL_R: {
+
+    } break;
+    case NT_RELATIONAL_OP: {
+
+    } break;
+    case NT_ARITHMETIC: {
+
+    } break;
+    case NT_ARITHMETIC_R: {
+
+    } break;
+    case NT_TERM: {
+
+    } break;
+    case NT_TERM_R: {
+
+    } break;
+    case NT_FACTOR: {
+
+    } break;
+    default: break;
     }
 
     p->ast_cur = cur;
+}
+
+static inline void parser_add_ast_node_from_token(Parser *p)
+{
+
 }
 
 CyString compile(String src_code)
