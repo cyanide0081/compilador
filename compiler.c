@@ -1135,6 +1135,9 @@ typedef struct {
     isize cap;
 } ParserStack;
 
+// NOTE(cya): equivalent to alignof(ParserSymbol)
+#define PARSER_STACK_ALIGN (sizeof(Token))
+
 #define AST_KINDS \
     AST_KIND(IDENT, Ident, struct { \
         Token tok; \
@@ -1226,8 +1229,14 @@ struct AstNode {
 };
 
 #define AST_NODE_ALLOC(alloc, _kind) cy_alloc(alloc, (sizeof(AstNode)))
+
+// FIXME(cya): revamp these macros
 #define AST_NODE_ALLOC_ITEM(alloc, node, _kind) cy_resize( \
     alloc, node, node->u._kind.len++ * sizeof(*node), \
+    node->u._kind.len * sizeof(*node) \
+)
+#define AST_NODE_LIST_CREATE(alloc) cy_alloc( \
+    alloc, node->u._kind.len++ * sizeof(*node), \
     node->u._kind.len * sizeof(*node) \
 )
 
@@ -1249,8 +1258,6 @@ typedef struct {
     AstNode *ast_cur;
     ParserError err;
 } Parser;
-
-#define PARSER_STACK_ALIGN (sizeof(Token))
 
 static inline void parser_error(Parser *p, ParserErrorKind kind);
 
@@ -1462,37 +1469,37 @@ static Ast parse(CyAllocator a, Parser *p)
         parser_add_ast_node_from_non_terminal(p);
         parser_stack_pop(p);
         switch (rule) {
-        case GR_0: {  // <inicio> ::= main <lista_instr> end
+        case GR_0: { // <inicio> ::= main <lista_instr> end
             parser_stack_push_token(p, C_TOKEN_END);
             parser_stack_push_non_terminal(p, NT_INSTR_LIST);
             parser_stack_push_token(p, C_TOKEN_MAIN);
         } break;
-        case GR_1: {  // <lista_instr> ::= <instrucao> ";" <lista_instr_rep>
+        case GR_1: { // <lista_instr> ::= <instrucao> ";" <lista_instr_rep>
             parser_stack_push_non_terminal(p, NT_INSTR_LIST_R);
             parser_stack_push_token(p, C_TOKEN_SEMICOLON);
             parser_stack_push_non_terminal(p, NT_INSTRUCTION);
         } break;
-        case GR_2: {  // <lista_instr_rep> ::= <lista_instr>
+        case GR_2: { // <lista_instr_rep> ::= <lista_instr>
             parser_stack_push_non_terminal(p, NT_INSTR_LIST);
         } break;
-        case GR_3: {  // <lista_instr_rep> ::= î
+        case GR_3: { // <lista_instr_rep> ::= î
         } break;
-        case GR_4: {  // <instrucao> ::= <dec_ou_atr>
+        case GR_4: { // <instrucao> ::= <dec_ou_atr>
             parser_stack_push_non_terminal(p, NT_DEC_OR_ASSIGN);
         } break;
-        case GR_5: {  // <instrucao> ::= <cmd_entr>
+        case GR_5: { // <instrucao> ::= <cmd_entr>
             parser_stack_push_non_terminal(p, NT_CMD_INPUT);
         } break;
-        case GR_6: {  // <instrucao> ::= <cmd_saida>
+        case GR_6: { // <instrucao> ::= <cmd_saida>
             parser_stack_push_non_terminal(p, NT_CMD_OUTPUT);
         } break;
-        case GR_7: {  // <instrucao> ::= <cmd_rep>
+        case GR_7: { // <instrucao> ::= <cmd_rep>
             parser_stack_push_non_terminal(p, NT_CMD_LOOP);
         } break;
-        case GR_8: {  // <instrucao> ::= <cmd_sel>
+        case GR_8: { // <instrucao> ::= <cmd_sel>
             parser_stack_push_non_terminal(p, NT_CMD_COND);
         } break;
-        case GR_9: {  // <dec_ou_atr> ::= <lista_id> <atr_opt>
+        case GR_9: { // <dec_ou_atr> ::= <lista_id> <atr_opt>
             parser_stack_push_non_terminal(p, NT_ASSIGN_OPT);
             parser_stack_push_non_terminal(p, NT_ID_LIST);
         } break;
@@ -1755,6 +1762,7 @@ static inline void parser_add_ast_node_from_non_terminal(Parser *p)
 
         new = AST_NODE_ALLOC(a, StmtList);
         new->kind = AST_STMT_LIST;
+        // FIXME(cya): fix or ban
         new->u.StmtList.stmts[0] = AST_NODE_ALLOC_ITEM(a, NULL, StmtList);
 
         cur->u.Main.body = new;
