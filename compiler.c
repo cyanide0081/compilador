@@ -1108,16 +1108,219 @@ static GrammarRule g_ll1_table[LL1_ROW_COUNT][LL1_COL_COUNT] = {
     },
 };
 
-typedef enum {
-    P_ERR_OUT_OF_MEMORY = -1,
-    P_ERR_NONE,
-    P_ERR_REACHED_EOF,
-    P_ERR_UNEXPECTED_TOKEN,
-    P_ERR_INVALID_RULE,
-} ParserErrorKind;
+#define AST_KINDS \
+    AST_KIND(IDENT, struct { \
+        Token tok; \
+    }) \
+    AST_KIND(LITERAL, struct { \
+        Token tok; \
+    }) \
+    AST_KIND(MAIN, struct { \
+        AstNode *body; \
+    }) \
+    AST_KIND(IDENT_LIST, struct { \
+        AstList list; \
+    }) \
+    AST_KIND(VAR_DECL, struct { \
+        AstNode *ident_list; \
+    }) \
+    AST_KIND(ASSIGN_STMT, struct { \
+        AstNode *ident_list; \
+        AstNode *expr; \
+    }) \
+    AST_KIND(READ_STMT, struct { \
+        AstNode *input_list; \
+    }) \
+    AST_KIND(INPUT_LIST, struct { \
+        AstList list; \
+    }) \
+    AST_KIND(INPUT_ARG, struct { \
+        AstNode *prompt; \
+        Token ident; \
+    }) \
+    AST_KIND(INPUT_PROMPT, struct { \
+        Token string; \
+    }) \
+    AST_KIND(WRITE_STMT, struct { \
+        Token keyword; \
+        AstNode *expr_list; \
+    }) \
+    AST_KIND(EXPR_LIST, struct { \
+        AstList list; \
+    }) \
+    AST_KIND(IF_STMT, struct { \
+        AstNode *body; \
+        AstNode *cond; \
+        AstNode *else_stmt; \
+        b32 is_root; \
+    }) \
+    AST_KIND(STMT_LIST, struct { \
+        AstList list; \
+    }) \
+    AST_KIND(REPEAT_STMT, struct { \
+        AstNode *body; \
+        Token keyword; \
+        AstNode *expr; \
+    }) \
+    AST_KIND(BINARY_EXPR, struct { \
+        AstNode *left; \
+        AstNode *right; \
+        Token op; \
+    }) \
+    AST_KIND(UNARY_EXPR, struct { \
+        AstNode *expr; \
+        Token op; \
+    }) \
+    AST_KIND(PAREN_EXPR, struct { \
+        AstNode *expr; \
+    }) \
+    AST_KIND(KIND_COUNT, isize)
 
+#define AST_KIND_PREFIX(t) AST_KIND_##t
+typedef enum {
+#define AST_KIND(e, ...) AST_KIND_PREFIX(e),
+    AST_KINDS
+#undef AST_KIND
+} AstKind;
+
+typedef struct AstNode AstNode;
 
 typedef struct {
+    CyAllocator alloc;
+    AstNode **data;
+    isize len;
+    isize cap;
+} AstList;
+
+#define AST_LIST_INIT_CAP 0x10
+
+#define AST_PREFIX(t) AST_##t
+#define AST_KIND(t, s) typedef s AST_PREFIX(t);
+    AST_KINDS
+#undef AST_KIND
+
+struct AstNode {
+    AstKind kind;
+    union {
+#define AST_KIND(t, ...) AST_PREFIX(t) t;
+        AST_KINDS
+#undef AST_KIND
+    } u;
+};
+
+typedef struct {
+    CyAllocator alloc;
+    AstNode *root;
+} Ast;
+
+// TODO(cya): maybe alloc only the size of the required kind?
+#define AST_NODE_ALLOC(alloc, k) ast_node_alloc(alloc, AST_KIND_PREFIX(k))
+
+static inline AstNode *ast_node_alloc(CyAllocator a, AstKind kind)
+{
+    AstNode *node = cy_alloc(a, sizeof(AstNode));
+    CY_VALIDATE_PTR(node);
+
+    node->kind = kind;
+    return node;
+}
+
+static inline AstList ast_list_init(CyAllocator a)
+{
+    isize cap = AST_LIST_INIT_CAP;
+    AstNode **data = cy_alloc(a, cap * sizeof(AstNode*));
+    return (AstList){
+        .alloc = a,
+        .data = data,
+        .cap = data == NULL ? 0 : cap,
+    };
+}
+
+#define AST_LIST_CREATE(alloc, _list, new, _kind) { \
+    new = *_list; \
+    if (*_list == NULL) { \
+        new = AST_NODE_ALLOC(alloc, _kind); \
+        new->u._kind.list = ast_list_init(alloc); \
+        *_list = new; \
+    }  \
+} (void)0
+
+static inline void ast_binary_expr_reduce(CyAllocator a, AstNode *expr)
+{
+    CY_ASSERT(expr->kind == AST_KIND_BINARY_EXPR);
+
+    AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
+    CY_ASSERT(e->right == NULL);
+
+    AstNode *child = e->left;
+    cy_mem_copy(expr, child, sizeof(*expr));
+    cy_free(a, child);
+}
+
+static inline void ast_list_append_node(AstList *l, AstNode *node)
+{
+    if (l->len == l->cap) {
+        isize new_cap = l->cap * 2;
+        AstNode **new = cy_resize(
+            l->alloc, l->data,
+            l->cap * sizeof(AstNode*), new_cap * sizeof(AstNode*)
+        );
+        l->data = new;
+        l->cap = new_cap;
+    }
+
+    l->data[l->len++] = node;
+}
+
+static inline void ast_list_shrink(AstList *l)
+{
+    if (l->len == l->cap) {
+        return;
+    }
+
+    isize new_cap = l->len;
+    AstNode **new = cy_resize(
+        l->alloc, l->data,
+        l->cap * sizeof(AstNode*), new_cap * sizeof(AstNode*)
+    );
+    l->data = new;
+    l->cap = new_cap;
+}
+
+static inline void ast_binary_expr_insert_node(AstNode *expr, AstNode *node)
+{
+    AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
+    CY_ASSERT(e->left == NULL || e->right == NULL);
+
+    if (e->left == NULL) {
+        e->left = node;
+    } else {
+        e->right = node;
+    }
+}
+
+static inline void ast_binary_expr_insert_lhs(AstNode *expr, AstNode *node)
+{
+    AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
+    CY_ASSERT(e->left == NULL);
+
+    e->left = node;
+}
+
+static inline void ast_binary_expr_insert_rhs(
+    AstNode *expr, Token *op, AstNode *node
+) {
+
+    AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
+    CY_ASSERT(e->right == NULL);
+
+    e->op = *op;
+    e->right = node;
+}
+
+typedef struct {
+    AstNode *ast_entry;
+    b32 is_frame_start;
     enum {
         PARSER_KIND_TOKEN,
         PARSER_KIND_NON_TERMINAL,
@@ -1138,112 +1341,13 @@ typedef struct {
 // NOTE(cya): equivalent to alignof(ParserSymbol)
 #define PARSER_STACK_ALIGN (sizeof(Token))
 
-#define AST_KINDS \
-    AST_KIND(IDENT, Ident, struct { \
-        Token tok; \
-    }) \
-    AST_KIND(LITERAL, Literal, struct { \
-        Token tok; \
-    }) \
-    AST_KIND(MAIN, Main, struct { \
-        AstNode *body; \
-    }) \
-    AST_KIND(IDENT_LIST, IdentList, struct { \
-        Token *idents; \
-        isize len; \
-    }) \
-    AST_KIND(VAR_DECL, VarDecl, struct { \
-        AstNode *ident_list; \
-    }) \
-    AST_KIND(ASSIGN_STMT, AssignStmt, struct { \
-        AstNode *ident_list; \
-        AstNode *expr; \
-    }) \
-    AST_KIND(READ_STMT, ReadStmt, struct { \
-        AstNode *args; \
-    }) \
-    AST_KIND(INPUT_LIST, InputList, struct { \
-        AstNode *string_opt; \
-        Token ident; \
-        AstNode *next; \
-    }) \
-    AST_KIND(STRING_OPT, StringOpt, struct { \
-        Token string; \
-    }) \
-    AST_KIND(WRITE_STMT, WriteStmt, struct { \
-        Token keyword; \
-        AstNode *args; \
-    }) \
-    AST_KIND(EXPR_LIST, ExprList, struct { \
-        AstNode *exprs; \
-        isize len; \
-    }) \
-    AST_KIND(IF_STMT, IfStmt, struct { \
-        AstNode *cond; \
-        AstNode *body; \
-        AstNode *else_stmt; \
-    }) \
-    AST_KIND(STMT_LIST, StmtList, struct { \
-        AstNode **stmts; \
-        isize len; \
-    }) \
-    AST_KIND(REPEAT_STMT, RepeatStmt, struct { \
-        AstNode *body; \
-        Token label; \
-        AstNode *expr; \
-    }) \
-    AST_KIND(BINARY_EXPR, BinaryExpr, struct { \
-        Token op; \
-        AstNode *left; \
-        AstNode *right; \
-    }) \
-    AST_KIND(UNARY_EXPR, UnaryExpr, struct { \
-        Token op; \
-        AstNode *expr; \
-    }) \
-    AST_KIND(PAREN_EXPR, ParenExpr, struct { \
-        Token open; \
-        AstNode *expr; \
-        Token close; \
-    }) \
-    AST_KIND(KIND_COUNT, KindCount, isize)
-
 typedef enum {
-#define AST_KIND(e, ...) AST_##e,
-    AST_KINDS
-#undef AST_KIND
-} AstKind;
-
-typedef struct AstNode AstNode;
-#define AST_KIND(e, t, s) typedef s Ast##t;
-    AST_KINDS
-#undef AST_KIND
-
-struct AstNode {
-    AstKind kind;
-    union {
-#define AST_KIND(e, t, ...) Ast##t t;
-        AST_KINDS
-#undef AST_KIND
-    } u;
-};
-
-#define AST_NODE_ALLOC(alloc, _kind) cy_alloc(alloc, (sizeof(AstNode)))
-
-// FIXME(cya): revamp these macros
-#define AST_NODE_ALLOC_ITEM(alloc, node, _kind) cy_resize( \
-    alloc, node, node->u._kind.len++ * sizeof(*node), \
-    node->u._kind.len * sizeof(*node) \
-)
-#define AST_NODE_LIST_CREATE(alloc) cy_alloc( \
-    alloc, node->u._kind.len++ * sizeof(*node), \
-    node->u._kind.len * sizeof(*node) \
-)
-
-typedef struct {
-    CyAllocator alloc;
-    AstNode *root;
-} Ast;
+    P_ERR_OUT_OF_MEMORY = -1,
+    P_ERR_NONE,
+    P_ERR_REACHED_EOF,
+    P_ERR_UNEXPECTED_TOKEN,
+    P_ERR_INVALID_RULE,
+} ParserErrorKind;
 
 typedef struct {
     ParserErrorKind kind;
@@ -1255,19 +1359,20 @@ typedef struct {
     Token *read_tok;
     ParserStack stack;
     Ast *ast;
-    AstNode *ast_cur;
+    AstNode *cur_node;
     ParserError err;
 } Parser;
 
-static inline void parser_error(Parser *p, ParserErrorKind kind);
+static void parser_error(Parser *p, ParserErrorKind kind);
+static inline ParserSymbol *parser_stack_peek(Parser *p);
 
-// TODO(cya): we could probably just use the stack allocator for this
-static inline void parser_stack_push(Parser *p, ParserSymbol item)
-{
+static inline void parser_stack_push(
+    Parser *p, ParserSymbol item, AstNode *ast_entry
+) {
     if (p->stack.len == p->stack.cap) {
         isize old_size = p->stack.cap * sizeof(*p->stack.items);
         isize new_size = old_size * 2;
-        ParserSymbol *items = cy_default_resize_align(
+        ParserSymbol *items = cy_resize_align(
             p->stack.alloc, p->stack.items,
             old_size, new_size,
             PARSER_STACK_ALIGN
@@ -1281,23 +1386,30 @@ static inline void parser_stack_push(Parser *p, ParserSymbol item)
         p->stack.cap *= 2;
     }
 
+    item.ast_entry = ast_entry == NULL ? p->cur_node : ast_entry;
+    // if (item.ast_entry == NULL) {
+    //     item.ast_entry = p->cur_node;
+    // }
+
     p->stack.items[p->stack.len++] = item;
 }
 
-static inline void parser_stack_push_token(Parser *p, TokenKind kind)
-{
+static inline void parser_stack_push_token(
+    Parser *p, TokenKind kind, AstNode *ast_entry
+) {
     parser_stack_push(p, (ParserSymbol){
         .kind = PARSER_KIND_TOKEN,
         .u.token = (Token){.kind = kind, .str = g_token_strings[kind]},
-    });
+    }, ast_entry);
 }
 
-static inline void parser_stack_push_non_terminal(Parser *p, NonTerminal n)
-{
+static inline void parser_stack_push_non_terminal(
+    Parser *p, NonTerminal n, AstNode *ast_entry
+) {
     parser_stack_push(p, (ParserSymbol){
         .kind = PARSER_KIND_NON_TERMINAL,
         .u.non_terminal = n,
-    });
+    }, ast_entry);
 }
 
 static inline void parser_stack_pop(Parser *p)
@@ -1314,6 +1426,22 @@ static inline ParserSymbol *parser_stack_peek(Parser *p)
 {
     CY_VALIDATE_PTR(p);
     return (p->stack.len > 0) ? &p->stack.items[p->stack.len - 1] : NULL;
+}
+
+static inline b32 parser_stack_is_empty(Parser *p)
+{
+    return p->stack.len < 1;
+}
+
+static inline void parser_stack_mark_top_as_frame(Parser *p)
+{
+    ParserSymbol *s = parser_stack_peek(p);
+    s->is_frame_start = true;
+}
+
+static inline void parser_copy_read_tok(Parser *p, Token *out)
+{
+    cy_mem_copy(out, p->read_tok, sizeof(*out));
 }
 
 static inline void parser_error(Parser *p, ParserErrorKind kind)
@@ -1420,20 +1548,16 @@ static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
             .cap = cap,
         },
     };
-    parser_stack_push_token(&p, C_TOKEN_EOF);
-    parser_stack_push_non_terminal(&p, NT_START);
+    parser_stack_push_token(&p, C_TOKEN_EOF, NULL);
+    parser_stack_push_non_terminal(&p, NT_START, NULL);
 
     return p;
 }
-
-static void parser_add_ast_node_from_non_terminal(Parser *p);
-static void parser_add_ast_node_from_token(Parser *p);
 
 static Ast parse(CyAllocator a, Parser *p)
 {
     Ast ast = { .alloc = a };
     p->ast = &ast;
-
     for (;;) {
         if (p->err.kind != P_ERR_NONE) {
             break;
@@ -1452,9 +1576,15 @@ static Ast parse(CyAllocator a, Parser *p)
                 break;
             }
 
-            parser_add_ast_node_from_token(p);
             parser_stack_pop(p);
             p->read_tok += 1;
+            continue;
+        } else if (stack_top->is_frame_start) {
+            parser_stack_pop(p);
+            if (!parser_stack_is_empty(p)) {
+                p->cur_node = parser_stack_peek(p)->ast_entry;
+            }
+
             continue;
         }
 
@@ -1466,427 +1596,664 @@ static Ast parse(CyAllocator a, Parser *p)
             break;
         }
 
-        parser_add_ast_node_from_non_terminal(p);
-        parser_stack_pop(p);
+        parser_stack_mark_top_as_frame(p);
+
+        AstNode *new_node = p->cur_node;
         switch (rule) {
         case GR_0: { // <inicio> ::= main <lista_instr> end
-            parser_stack_push_token(p, C_TOKEN_END);
-            parser_stack_push_non_terminal(p, NT_INSTR_LIST);
-            parser_stack_push_token(p, C_TOKEN_MAIN);
+            parser_stack_push_token(p, C_TOKEN_END, NULL);
+            parser_stack_push_non_terminal(p, NT_INSTR_LIST, NULL);
+            parser_stack_push_token(p, C_TOKEN_MAIN, NULL);
+
+            CY_ASSERT(p->cur_node == NULL);
+
+            new_node = AST_NODE_ALLOC(a, MAIN);
+            ast.root = new_node;
         } break;
         case GR_1: { // <lista_instr> ::= <instrucao> ";" <lista_instr_rep>
-            parser_stack_push_non_terminal(p, NT_INSTR_LIST_R);
-            parser_stack_push_token(p, C_TOKEN_SEMICOLON);
-            parser_stack_push_non_terminal(p, NT_INSTRUCTION);
+            parser_stack_push_non_terminal(p, NT_INSTR_LIST_R, NULL);
+            parser_stack_push_token(p, C_TOKEN_SEMICOLON, NULL);
+            parser_stack_push_non_terminal(p, NT_INSTRUCTION, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_MAIN);
+
+            AstNode **body = &(p->cur_node->u.MAIN.body);
+            AST_LIST_CREATE(a, body, new_node, STMT_LIST);
         } break;
         case GR_2: { // <lista_instr_rep> ::= <lista_instr>
-            parser_stack_push_non_terminal(p, NT_INSTR_LIST);
+            parser_stack_push_non_terminal(p, NT_INSTR_LIST, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_MAIN);
         } break;
         case GR_3: { // <lista_instr_rep> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_MAIN);
+
+            AstList *l = &p->cur_node->u.MAIN.body->u.STMT_LIST.list;
+            ast_list_shrink(l);
         } break;
         case GR_4: { // <instrucao> ::= <dec_ou_atr>
-            parser_stack_push_non_terminal(p, NT_DEC_OR_ASSIGN);
+            parser_stack_push_non_terminal(p, NT_DEC_OR_ASSIGN, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            // NOTE(cya): assuming assignment first
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, ASSIGN_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_5: { // <instrucao> ::= <cmd_entr>
-            parser_stack_push_non_terminal(p, NT_CMD_INPUT);
+            parser_stack_push_non_terminal(p, NT_CMD_INPUT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, READ_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_6: { // <instrucao> ::= <cmd_saida>
-            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT);
+            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, WRITE_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_7: { // <instrucao> ::= <cmd_rep>
-            parser_stack_push_non_terminal(p, NT_CMD_LOOP);
+            parser_stack_push_non_terminal(p, NT_CMD_LOOP, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, REPEAT_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_8: { // <instrucao> ::= <cmd_sel>
-            parser_stack_push_non_terminal(p, NT_CMD_COND);
+            parser_stack_push_non_terminal(p, NT_CMD_COND, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, IF_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_9: { // <dec_ou_atr> ::= <lista_id> <atr_opt>
-            parser_stack_push_non_terminal(p, NT_ASSIGN_OPT);
-            parser_stack_push_non_terminal(p, NT_ID_LIST);
+            parser_stack_push_non_terminal(p, NT_ASSIGN_OPT, NULL);
+            parser_stack_push_non_terminal(p, NT_ID_LIST, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_ASSIGN_STMT);
+
+            AstNode **ident_list = &p->cur_node->u.ASSIGN_STMT.ident_list;
+            AST_LIST_CREATE(a, ident_list, new_node, IDENT_LIST);
         } break;
         case GR_10: { // <atr_opt> ::= "=" <expr>
-            parser_stack_push_non_terminal(p, NT_EXPR);
-            parser_stack_push_token(p, C_TOKEN_EQUALS);
+            parser_stack_push_non_terminal(p, NT_EXPR, NULL);
+            parser_stack_push_token(p, C_TOKEN_EQUALS, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_ASSIGN_STMT);
         } break;
         case GR_11: { // <atr_opt> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_ASSIGN_STMT);
+
+            p->cur_node->kind = AST_KIND_VAR_DECL;
         } break;
         case GR_12: { // <lista_id> ::= identificador <lista_id_mul>
-            parser_stack_push_non_terminal(p, NT_ID_LIST_R);
-            parser_stack_push_token(p, C_TOKEN_IDENT);
+            parser_stack_push_non_terminal(p, NT_ID_LIST_R, NULL);
+            parser_stack_push_token(p, C_TOKEN_IDENT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_IDENT_LIST);
+
+            AstNode *ident_node = AST_NODE_ALLOC(a, IDENT);
+            parser_copy_read_tok(p, &ident_node->u.IDENT.tok);
+
+            AstList *l = &p->cur_node->u.IDENT_LIST.list;
+            ast_list_append_node(l, ident_node);
         } break;
         case GR_13: { // <lista_id_mul> ::= "," <lista_id>
-            parser_stack_push_non_terminal(p, NT_ID_LIST);
-            parser_stack_push_token(p, C_TOKEN_COMMA);
+            parser_stack_push_non_terminal(p, NT_ID_LIST, NULL);
+            parser_stack_push_token(p, C_TOKEN_COMMA, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_IDENT_LIST);
         } break;
         case GR_14: { // <lista_id_mul> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_IDENT_LIST);
+
+            AstList *l = &p->cur_node->u.IDENT_LIST.list;
+            ast_list_shrink(l);
         } break;
         case GR_15: { // <cmd> ::= <cmd_atr>
-            parser_stack_push_non_terminal(p, NT_CMD_ASSIGN);
+            parser_stack_push_non_terminal(p, NT_CMD_ASSIGN, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, ASSIGN_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_16: { // <cmd> ::= <cmd_entr>
-            parser_stack_push_non_terminal(p, NT_CMD_INPUT);
+            parser_stack_push_non_terminal(p, NT_CMD_INPUT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, READ_STMT);
+            ast_list_append_node(l, new_node);
         } break;
-        case GR_17: { // <cmd> ::= <cmd_saida>
-            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT);
+         case GR_17: { // <cmd> ::= <cmd_saida>
+            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, WRITE_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_18: { // <cmd> ::= <cmd_rep>
-            parser_stack_push_non_terminal(p, NT_CMD_LOOP);
+            parser_stack_push_non_terminal(p, NT_CMD_LOOP, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, REPEAT_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_19: { // <cmd> ::= <cmd_sel>
-            parser_stack_push_non_terminal(p, NT_CMD_COND);
+            parser_stack_push_non_terminal(p, NT_CMD_COND, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_STMT_LIST);
+
+            AstList *l = &p->cur_node->u.STMT_LIST.list;
+            new_node = AST_NODE_ALLOC(a, IF_STMT);
+            ast_list_append_node(l, new_node);
         } break;
         case GR_20: { // <cmd_atr> ::= <lista_id> "=" <expr>
-            parser_stack_push_non_terminal(p, NT_EXPR);
-            parser_stack_push_token(p, C_TOKEN_EQUALS);
-            parser_stack_push_non_terminal(p, NT_ID_LIST);
+            parser_stack_push_non_terminal(p, NT_EXPR, NULL);
+            parser_stack_push_token(p, C_TOKEN_EQUALS, NULL);
+            parser_stack_push_non_terminal(p, NT_ID_LIST, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_ASSIGN_STMT);
+
+            AstNode **ident_list = &p->cur_node->u.ASSIGN_STMT.ident_list;
+            AST_LIST_CREATE(a, ident_list, new_node, IDENT_LIST);
         } break;
         case GR_21: { // <cmd_entr> ::= read "(" <lista_entr> ")"
-            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE);
-            parser_stack_push_non_terminal(p, NT_INPUT_LIST);
-            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN);
-            parser_stack_push_token(p, C_TOKEN_READ);
+            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE, NULL);
+            parser_stack_push_non_terminal(p, NT_INPUT_LIST, NULL);
+            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN, NULL);
+            parser_stack_push_token(p, C_TOKEN_READ, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_READ_STMT);
+
+            AstNode **input_list = &(p->cur_node->u.READ_STMT.input_list);
+            AST_LIST_CREATE(a, input_list, new_node, INPUT_LIST);
         } break;
         case GR_22: { // <lista_entr> ::= <cte_str_opt> id <lista_entr_mul>
-            parser_stack_push_non_terminal(p, NT_INPUT_LIST_R);
-            parser_stack_push_token(p, C_TOKEN_IDENT);
-            parser_stack_push_non_terminal(p, NT_STRING_OPT);
+            parser_stack_push_non_terminal(p, NT_INPUT_LIST_R, NULL);
+            parser_stack_push_token(p, C_TOKEN_IDENT, NULL);
+            parser_stack_push_non_terminal(p, NT_STRING_OPT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_INPUT_LIST);
+
+            new_node = AST_NODE_ALLOC(a, INPUT_ARG);
+            parser_copy_read_tok(p, &new_node->u.INPUT_ARG.ident);
+
+            AstList *l = &p->cur_node->u.INPUT_LIST.list;
+            ast_list_append_node(l, new_node);
         } break;
         case GR_23: { // <lista_entr_mul> ::= "," <lista_entr>
-            parser_stack_push_non_terminal(p, NT_INPUT_LIST);
-            parser_stack_push_token(p, C_TOKEN_COMMA);
+            parser_stack_push_non_terminal(p, NT_INPUT_LIST, NULL);
+            parser_stack_push_token(p, C_TOKEN_COMMA, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_INPUT_LIST);
         } break;
         case GR_24: { // <lista_entr_mul> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_INPUT_LIST);
+
+            AstList *l = &p->cur_node->u.INPUT_LIST.list;
+            ast_list_shrink(l);
         } break;
         case GR_25: { // <cte_str_opt> ::= constante_string ","
-            parser_stack_push_token(p, C_TOKEN_COMMA);
-            parser_stack_push_token(p, C_TOKEN_STRING);
+            parser_stack_push_token(p, C_TOKEN_COMMA, NULL);
+            parser_stack_push_token(p, C_TOKEN_STRING, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_INPUT_ARG);
+
+            new_node = AST_NODE_ALLOC(a, INPUT_PROMPT);
+            parser_copy_read_tok(p, &new_node->u.INPUT_PROMPT.string);
+
+            p->cur_node->u.INPUT_ARG.prompt = new_node;
         } break;
         case GR_26: { // <cte_str_opt> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_INPUT_ARG);
         } break;
         case GR_27: { // <cmd_saida> ::= <cmd_saida_tipo> "(" <lista_expr> ")"
-            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE);
-            parser_stack_push_non_terminal(p, NT_EXPR_LIST);
-            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN);
-            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT_KEYWORD);
+            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE, NULL);
+            parser_stack_push_non_terminal(p, NT_EXPR_LIST, NULL);
+            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN, NULL);
+            parser_stack_push_non_terminal(p, NT_CMD_OUTPUT_KEYWORD, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_WRITE_STMT);
         } break;
         case GR_28: { // <cmd_saida_tipo> ::= write
-            parser_stack_push_token(p, C_TOKEN_WRITE);
+            parser_stack_push_token(p, C_TOKEN_WRITE, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_WRITE_STMT);
+
+            parser_copy_read_tok(p, &p->cur_node->u.WRITE_STMT.keyword);
         } break;
         case GR_29: { // <cmd_saida_tipo> ::= writeln
-            parser_stack_push_token(p, C_TOKEN_WRITELN);
+            parser_stack_push_token(p, C_TOKEN_WRITELN, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_WRITE_STMT);
+
+            parser_copy_read_tok(p, &p->cur_node->u.WRITE_STMT.keyword);
         } break;
         case GR_30: { // <lista_expr> ::= <expr> <lista_expr_mul>
-            parser_stack_push_non_terminal(p, NT_EXPR_LIST_R);
-            parser_stack_push_non_terminal(p, NT_EXPR);
+            parser_stack_push_non_terminal(p, NT_EXPR_LIST_R, NULL);
+            parser_stack_push_non_terminal(p, NT_EXPR, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_WRITE_STMT);
+
+            AstNode **expr_list = &p->cur_node->u.WRITE_STMT.expr_list;
+            AST_LIST_CREATE(a, expr_list, new_node, EXPR_LIST);
         } break;
         case GR_31: { // <lista_expr_mul> ::= "," <lista_expr>
-            parser_stack_push_non_terminal(p, NT_EXPR_LIST);
-            parser_stack_push_token(p, C_TOKEN_COMMA);
+            parser_stack_push_non_terminal(p, NT_EXPR_LIST, NULL);
+            parser_stack_push_token(p, C_TOKEN_COMMA, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_WRITE_STMT);
         } break;
         case GR_32: { // <lista_expr_mul> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_WRITE_STMT);
+
+            AstList *l = &p->cur_node->u.WRITE_STMT.expr_list->u.EXPR_LIST.list;
+            ast_list_shrink(l);
         } break;
         case GR_33: { // <cmd_sel> ::= if <expr> <lista_cmd> <elif> <else> end
-            parser_stack_push_token(p, C_TOKEN_END);
-            parser_stack_push_non_terminal(p, NT_ELSE);
-            parser_stack_push_non_terminal(p, NT_ELIF);
-            parser_stack_push_non_terminal(p, NT_CMD_LIST);
-            parser_stack_push_non_terminal(p, NT_EXPR);
-            parser_stack_push_token(p, C_TOKEN_IF);
+            parser_stack_push_token(p, C_TOKEN_END, NULL);
+            parser_stack_push_non_terminal(p, NT_ELSE, NULL);
+            parser_stack_push_non_terminal(p, NT_ELIF, NULL);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST, NULL);
+            parser_stack_push_non_terminal(p, NT_EXPR, NULL);
+            parser_stack_push_token(p, C_TOKEN_IF, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
+
+            p->cur_node->u.IF_STMT.is_root = true;
         } break;
         case GR_34: { // <elif> ::= elif <expr> <lista_cmd> <elif>
-            parser_stack_push_non_terminal(p, NT_ELIF);
-            parser_stack_push_non_terminal(p, NT_CMD_LIST);
-            parser_stack_push_non_terminal(p, NT_EXPR);
-            parser_stack_push_token(p, C_TOKEN_ELIF);
+            parser_stack_push_non_terminal(p, NT_ELIF, NULL);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST, NULL);
+            parser_stack_push_non_terminal(p, NT_EXPR, NULL);
+            parser_stack_push_token(p, C_TOKEN_ELIF, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
         } break;
         case GR_35: { // <elif> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
         } break;
         case GR_36: { // <else> ::= else <lista_cmd>
-            parser_stack_push_non_terminal(p, NT_CMD_LIST);
-            parser_stack_push_token(p, C_TOKEN_ELSE);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST, NULL);
+            parser_stack_push_token(p, C_TOKEN_ELSE, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
         } break;
         case GR_37: { // <else> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
         } break;
         case GR_38: { // <lista_cmd> ::= <cmd> ";" <lista_cmd_mul>
-            parser_stack_push_non_terminal(p, NT_CMD_LIST_R);
-            parser_stack_push_token(p, C_TOKEN_SEMICOLON);
-            parser_stack_push_non_terminal(p, NT_CMD);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST_R, NULL);
+            parser_stack_push_token(p, C_TOKEN_SEMICOLON, NULL);
+            parser_stack_push_non_terminal(p, NT_CMD, NULL);
+
+            CY_ASSERT(
+                p->cur_node->kind == AST_KIND_IF_STMT ||
+                p->cur_node->kind == AST_KIND_REPEAT_STMT
+            );
+
+            AstNode **body = &p->cur_node->u.IF_STMT.body;
+            AST_LIST_CREATE(a, body, new_node, STMT_LIST);
         } break;
         case GR_39: { // <lista_cmd_mul> ::= <lista_cmd>
-            parser_stack_push_non_terminal(p, NT_CMD_LIST);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST, NULL);
+
+            CY_ASSERT(
+                p->cur_node->kind == AST_KIND_IF_STMT ||
+                p->cur_node->kind == AST_KIND_REPEAT_STMT
+            );
         } break;
         case GR_40: { // <lista_cmd_mul> ::= î
+            CY_ASSERT(
+                p->cur_node->kind == AST_KIND_IF_STMT ||
+                p->cur_node->kind == AST_KIND_REPEAT_STMT
+            );
+
+            AstList *l = &p->cur_node->u.IF_STMT.body->u.STMT_LIST.list;
+            ast_list_shrink(l);
         } break;
         case GR_41: { // <cmd_rep> ::= repeat <lista_cmd> <cmd_rep_tipo> <expr>
-            parser_stack_push_non_terminal(p, NT_EXPR);
-            parser_stack_push_non_terminal(p, NT_CMD_LOOP_KEYWORD);
-            parser_stack_push_non_terminal(p, NT_CMD_LIST);
-            parser_stack_push_token(p, C_TOKEN_REPEAT);
+            parser_stack_push_non_terminal(p, NT_EXPR, NULL);
+            parser_stack_push_non_terminal(p, NT_CMD_LOOP_KEYWORD, NULL);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST, NULL);
+            parser_stack_push_token(p, C_TOKEN_REPEAT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_REPEAT_STMT);
         } break;
         case GR_42: { // <cmd_rep_tipo> ::= while
-            parser_stack_push_token(p, C_TOKEN_WHILE);
+            parser_stack_push_token(p, C_TOKEN_WHILE, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_REPEAT_STMT);
+
+            parser_copy_read_tok(p, &p->cur_node->u.REPEAT_STMT.keyword);
         } break;
         case GR_43: { // <cmd_rep_tipo> ::= until
-            parser_stack_push_token(p, C_TOKEN_UNTIL);
+            parser_stack_push_token(p, C_TOKEN_UNTIL, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_REPEAT_STMT);
         } break;
         case GR_44: { // <expr> ::= <elemento> <expr_log>
-            parser_stack_push_non_terminal(p, NT_EXPR_LOG);
-            parser_stack_push_non_terminal(p, NT_ELEMENT);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_EXPR_LOG, new_node);
+            parser_stack_push_non_terminal(p, NT_ELEMENT, new_node);
+
+            CY_ASSERT(
+                p->cur_node->kind == AST_KIND_EXPR_LIST ||
+                p->cur_node->kind == AST_KIND_ASSIGN_STMT ||
+                p->cur_node->kind == AST_KIND_IF_STMT ||
+                p->cur_node->kind == AST_KIND_REPEAT_STMT
+            );
+
+            switch (p->cur_node->kind) {
+            case AST_KIND_EXPR_LIST: {
+                AstList *l = &p->cur_node->u.EXPR_LIST.list;
+                ast_list_append_node(l, new_node);
+            } break;
+            case AST_KIND_ASSIGN_STMT: {
+                p->cur_node->u.ASSIGN_STMT.expr = new_node;
+            } break;
+            case AST_KIND_IF_STMT: {
+                p->cur_node->u.IF_STMT.cond = new_node;
+            } break;
+            case AST_KIND_REPEAT_STMT: {
+                p->cur_node->u.REPEAT_STMT.expr = new_node;
+            } break;
+            default: break;
+            }
         } break;
         case GR_45: { // <expr_log> ::= "&&" <elemento> <expr_log>
-            parser_stack_push_non_terminal(p, NT_EXPR_LOG);
-            parser_stack_push_non_terminal(p, NT_ELEMENT);
-            parser_stack_push_token(p, C_TOKEN_AND);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_EXPR_LOG, new_node);
+            parser_stack_push_non_terminal(p, NT_ELEMENT, new_node);
+            parser_stack_push_token(p, C_TOKEN_AND, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_46: { // <expr_log> ::= "||" <elemento> <expr_log>
-            parser_stack_push_non_terminal(p, NT_EXPR_LOG);
-            parser_stack_push_non_terminal(p, NT_ELEMENT);
-            parser_stack_push_token(p, C_TOKEN_OR);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_EXPR_LOG, new_node);
+            parser_stack_push_non_terminal(p, NT_ELEMENT, new_node);
+            parser_stack_push_token(p, C_TOKEN_OR, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_47: { // <expr_log> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            ast_binary_expr_reduce(a, p->cur_node);
         } break;
         case GR_48: { // <elemento> ::= <relacional>
-            parser_stack_push_non_terminal(p, NT_RELATIONAL);
+            parser_stack_push_non_terminal(p, NT_RELATIONAL, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_49: { // <elemento> ::= true
-            parser_stack_push_token(p, C_TOKEN_TRUE);
+            parser_stack_push_token(p, C_TOKEN_TRUE, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, LITERAL);
+            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_50: { // <elemento> ::= false
-            parser_stack_push_token(p, C_TOKEN_FALSE);
+            parser_stack_push_token(p, C_TOKEN_FALSE, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, LITERAL);
+            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_51: { // <elemento> ::= "!" <elemento>
-            parser_stack_push_non_terminal(p, NT_ELEMENT);
-            parser_stack_push_token(p, C_TOKEN_NOT);
+            new_node = AST_NODE_ALLOC(a, UNARY_EXPR);
+            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
+
+            parser_stack_push_non_terminal(p, NT_ELEMENT, new_node);
+            parser_stack_push_token(p, C_TOKEN_NOT, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_52: { // <relacional> ::= <aritmetica> <relacional_mul>
-            parser_stack_push_non_terminal(p, NT_RELATIONAL_R);
-            parser_stack_push_non_terminal(p, NT_ARITHMETIC);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_RELATIONAL_R, new_node);
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_53: { // <relacional_mul> ::= <operador_relacional> <aritmetica>
-            parser_stack_push_non_terminal(p, NT_ARITHMETIC);
-            parser_stack_push_non_terminal(p, NT_RELATIONAL_OP);
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC, NULL);
+            parser_stack_push_non_terminal(p, NT_RELATIONAL_OP, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
         } break;
         case GR_54: { // <relacional_mul> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            ast_binary_expr_reduce(a, p->cur_node);
         } break;
         case GR_55: { // <operador_relacional> ::= "=="
-            parser_stack_push_token(p, C_TOKEN_CMP_EQ);
+            parser_stack_push_token(p, C_TOKEN_CMP_EQ, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_56: { // <operador_relacional> ::= "!="
-            parser_stack_push_token(p, C_TOKEN_CMP_NE);
+            parser_stack_push_token(p, C_TOKEN_CMP_NE, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_57: { // <operador_relacional> ::= "<"
-            parser_stack_push_token(p, C_TOKEN_CMP_LT);
+            parser_stack_push_token(p, C_TOKEN_CMP_LT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_58: { // <operador_relacional> ::= ">"
-            parser_stack_push_token(p, C_TOKEN_CMP_GT);
+            parser_stack_push_token(p, C_TOKEN_CMP_GT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_59: { // <aritmetica> ::= <termo> <aritmetica_mul>
-            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R);
-            parser_stack_push_non_terminal(p, NT_TERM);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R, new_node);
+            parser_stack_push_non_terminal(p, NT_TERM, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_60: { // <aritmetica_mul> ::= "+" <termo> <aritmetica_mul>
-            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R);
-            parser_stack_push_non_terminal(p, NT_TERM);
-            parser_stack_push_token(p, C_TOKEN_ADD);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R, new_node);
+            parser_stack_push_non_terminal(p, NT_TERM, new_node);
+            parser_stack_push_token(p, C_TOKEN_ADD, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_61: { // <aritmetica_mul> ::= "-" <termo> <aritmetica_mul>
-            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R);
-            parser_stack_push_non_terminal(p, NT_TERM);
-            parser_stack_push_token(p, C_TOKEN_SUB);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_ARITHMETIC_R, new_node);
+            parser_stack_push_non_terminal(p, NT_TERM, new_node);
+            parser_stack_push_token(p, C_TOKEN_SUB, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_62: { // <aritmetica_mul> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            ast_binary_expr_reduce(a, p->cur_node);
         } break;
         case GR_63: { // <termo> ::= <fator> <termo_mul>
-            parser_stack_push_non_terminal(p, NT_TERM_R);
-            parser_stack_push_non_terminal(p, NT_FACTOR);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_TERM_R, new_node);
+            parser_stack_push_non_terminal(p, NT_FACTOR, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_64: { // <termo_mul> ::= "*" <fator> <termo_mul>
-            parser_stack_push_non_terminal(p, NT_TERM_R);
-            parser_stack_push_non_terminal(p, NT_FACTOR);
-            parser_stack_push_token(p, C_TOKEN_MUL);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_TERM_R, new_node);
+            parser_stack_push_non_terminal(p, NT_FACTOR, new_node);
+            parser_stack_push_token(p, C_TOKEN_MUL, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_65: { // <termo_mul> ::= "/" <fator> <termo_mul>
-            parser_stack_push_non_terminal(p, NT_TERM_R);
-            parser_stack_push_non_terminal(p, NT_FACTOR);
-            parser_stack_push_token(p, C_TOKEN_DIV);
+            new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
+
+            parser_stack_push_non_terminal(p, NT_TERM_R, new_node);
+            parser_stack_push_non_terminal(p, NT_FACTOR, new_node);
+            parser_stack_push_token(p, C_TOKEN_DIV, new_node);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_66: { // <termo_mul> ::= î
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            ast_binary_expr_reduce(a, p->cur_node);
         } break;
-        case GR_67: {  // <fator> ::= identificador
-            parser_stack_push_token(p, C_TOKEN_IDENT);
+        case GR_67: { // <fator> ::= identificador
+            parser_stack_push_token(p, C_TOKEN_IDENT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, IDENT);
+            parser_copy_read_tok(p, &new_node->u.IDENT.tok);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
-        case GR_68: {  // <fator> ::= constante_int
-            parser_stack_push_token(p, C_TOKEN_INTEGER);
+        case GR_68: { // <fator> ::= constante_int
+            parser_stack_push_token(p, C_TOKEN_INTEGER, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, LITERAL);
+            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
-        case GR_69: {  // <fator> ::= constante_float
-            parser_stack_push_token(p, C_TOKEN_FLOAT);
+        case GR_69: { // <fator> ::= constante_float
+            parser_stack_push_token(p, C_TOKEN_FLOAT, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, LITERAL);
+            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_70: { // <fator> ::= constante_string
-            parser_stack_push_token(p, C_TOKEN_STRING);
+            parser_stack_push_token(p, C_TOKEN_STRING, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, LITERAL);
+            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_71: { // <fator> ::= "(" <expr> ")"
-            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE);
-            parser_stack_push_non_terminal(p, NT_EXPR);
-            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN);
+            parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE, NULL);
+            parser_stack_push_non_terminal(p, NT_EXPR, NULL);
+            parser_stack_push_token(p, C_TOKEN_PAREN_OPEN, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, PAREN_EXPR);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_72: { // <fator> ::= "+" <fator>
-            parser_stack_push_non_terminal(p, NT_FACTOR);
-            parser_stack_push_token(p, C_TOKEN_ADD);
+            parser_stack_push_non_terminal(p, NT_FACTOR, NULL);
+            parser_stack_push_token(p, C_TOKEN_ADD, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, UNARY_EXPR);
+            parser_copy_read_tok(p, &new_node->u.UNARY_EXPR.op);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_73: { // <fator> ::= "-" <fator>
-            parser_stack_push_non_terminal(p, NT_FACTOR);
-            parser_stack_push_token(p, C_TOKEN_SUB);
+            parser_stack_push_non_terminal(p, NT_FACTOR, NULL);
+            parser_stack_push_token(p, C_TOKEN_SUB, NULL);
+
+            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+
+            new_node = AST_NODE_ALLOC(a, UNARY_EXPR);
+            parser_copy_read_tok(p, &new_node->u.UNARY_EXPR.op);
+
+            ast_binary_expr_insert_node(p->cur_node, new_node);
         } break;
         default: {
         } break;
         }
+
+        p->cur_node = new_node;
     }
 
     return ast;
-}
-
-static inline void parser_add_ast_node_from_non_terminal(Parser *p)
-{
-    CyAllocator a = p->ast->alloc;
-    AstNode *cur = p->ast_cur;
-    AstNode *new = NULL;
-    ParserSymbol *top = parser_stack_peek(p);
-    switch (top->u.non_terminal) {
-    case NT_START: {
-        new = AST_NODE_ALLOC(a, Main);
-        new->kind = AST_MAIN;
-        cur = new;
-        p->ast->root = new;
-    } break;
-    case NT_INSTR_LIST: {
-        CY_ASSERT(cur->kind == AST_MAIN);
-
-        new = AST_NODE_ALLOC(a, StmtList);
-        new->kind = AST_STMT_LIST;
-        // FIXME(cya): fix or ban
-        new->u.StmtList.stmts[0] = AST_NODE_ALLOC_ITEM(a, NULL, StmtList);
-
-        cur->u.Main.body = new;
-        cur = new;
-    } break;
-    case NT_INSTR_LIST_R: {
-        CY_ASSERT(cur->kind == AST_STMT_LIST);
-
-        cur = AST_NODE_ALLOC_ITEM(a, cur, StmtList);
-    } break;
-    case NT_INSTRUCTION: {
-        CY_ASSERT(cur->kind == AST_STMT_LIST);
-    } break;
-    case NT_DEC_OR_ASSIGN: {
-        CY_ASSERT(cur->kind == AST_STMT_LIST);
-
-        new = AST_NODE_ALLOC(a, VarDecl);
-        new->kind = AST_VAR_DECL;
-
-        isize last = cur->u.StmtList.len - 1;
-        cur->u.StmtList.stmts[last] = new;
-    } break;
-    case NT_ASSIGN_OPT: {
-
-    } break;
-    case NT_ID_LIST: {
-
-    } break;
-    case NT_ID_LIST_R: {
-
-    } break;
-    case NT_CMD: {
-
-    } break;
-    case NT_CMD_ASSIGN: {
-
-    } break;
-    case NT_CMD_INPUT: {
-
-    } break;
-    case NT_INPUT_LIST: {
-
-    } break;
-    case NT_INPUT_LIST_R: {
-
-    } break;
-    case NT_STRING_OPT: {
-
-    } break;
-    case NT_CMD_OUTPUT: {
-
-    } break;
-    case NT_CMD_OUTPUT_KEYWORD: {
-
-    } break;
-    case NT_CMD_COND: {
-
-    } break;
-    case NT_ELIF: {
-
-    } break;
-    case NT_ELSE: {
-
-    } break;
-    case NT_CMD_LIST: {
-
-    } break;
-    case NT_CMD_LIST_R: {
-
-    } break;
-    case NT_CMD_LOOP: {
-
-    } break;
-    case NT_CMD_LOOP_KEYWORD: {
-
-    } break;
-    case NT_EXPR_LIST: {
-
-    } break;
-    case NT_EXPR_LIST_R: {
-
-    } break;
-    case NT_EXPR: {
-
-    } break;
-    case NT_EXPR_LOG: {
-
-    } break;
-    case NT_ELEMENT: {
-
-    } break;
-    case NT_RELATIONAL: {
-
-    } break;
-    case NT_RELATIONAL_R: {
-
-    } break;
-    case NT_RELATIONAL_OP: {
-
-    } break;
-    case NT_ARITHMETIC: {
-
-    } break;
-    case NT_ARITHMETIC_R: {
-
-    } break;
-    case NT_TERM: {
-
-    } break;
-    case NT_TERM_R: {
-
-    } break;
-    case NT_FACTOR: {
-
-    } break;
-    default: break;
-    }
-
-    p->ast_cur = cur;
-}
-
-static inline void parser_add_ast_node_from_token(Parser *p)
-{
-
 }
 
 CyString compile(String src_code)
@@ -1910,12 +2277,14 @@ CyString compile(String src_code)
     CyStack parser_stack = cy_stack_init(heap_allocator, stack_size);
     CyAllocator stack_allocator = cy_stack_allocator(&parser_stack);
     Parser p = parser_init(stack_allocator, &token_list);
+
+    // TODO(cya): use pool allocator when implemented
     Ast a = parse(temp_allocator, &p);
     if (p.err.kind != P_ERR_NONE) {
         return parser_create_error_msg(heap_allocator, &p);
     }
 
-    CY_UNUSED(a); // TODO(cya): remove when the ast is implemented
+    CY_UNUSED(a); // TODO(cya): remove when the ast is actually used
 
     isize init_cap = 0x100;
     CyString output = cy_string_create_reserve(heap_allocator, init_cap);

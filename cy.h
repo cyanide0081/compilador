@@ -1184,7 +1184,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
             void *new_mem = cy_alloc_align(a, size, align);
             CY_VALIDATE_PTR(new_mem);
 
-            cy_mem_copy(new_mem, old_mem, old_size);
+            cy_mem_copy(new_mem, old_mem, CY_MIN(old_size, size));
             ptr = new_mem;
             break;
         }
@@ -1342,17 +1342,17 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
         u8 *cur_addr = old_mem;
         if (!(start <= cur_addr && cur_addr < end)) {
             CY_ASSERT_MSG(false, "out-of-bounds pointer");
-            break;;
+            break;
         }
         if (cur_addr >= start + cur_node->offset) {
-            break;; // NOTE(cya): allowing double-frees
+            break; // NOTE(cya): allowing double-frees
         }
 
         CyStackHeader *header = (CyStackHeader*)cur_addr - 1;
         isize prev_offset = cur_addr - header->padding - start;
         if (prev_offset != header->prev_offset) {
             CY_ASSERT_MSG(false, "out-of-order deallocation");
-            break;;
+            break;
         }
 
         cur_node->offset = cur_node->prev_offset;
@@ -1427,6 +1427,7 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
         isize new_size = largest_node_size * CY_STACK_GROWTH_FACTOR;
         isize max_alloc_size = align + sizeof(*header) + size;
 
+        CyStackNode *prev_node = cur_node;
         cur_node = cy_stack_insert_node(
             stack, CY_MAX(new_size, max_alloc_size)
         );
@@ -1438,6 +1439,16 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
         );
 
         ptr = cur_addr + new_padding;
+        cy_mem_copy(ptr, old_mem, old_size);
+
+        // NOTE(cya): manually freeing memory from old node to avoid bounds
+        // checking from free procedure
+        CyStackHeader *old_header = (CyStackHeader*)old_mem - 1;
+        // isize old_offset = (u8*)old_mem - old_header->padding - prev_node->buf;
+
+        prev_node->offset = prev_node->prev_offset;
+        prev_node->prev_offset = old_header->prev_offset;
+
         header = (CyStackHeader*)ptr - 1;
         header->padding = new_padding;
         header->prev_offset = cur_node->offset;
