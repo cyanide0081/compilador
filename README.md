@@ -9,8 +9,8 @@ de pequenos programas.
 - [X] Interface gráfica (*GUI*)
 - [X] Analisador léxico (*tokenizer*)
 - [X] Analisador sintático (*parser*)
-- [ ] Analisador semântico
-- [ ] Gerador de código intermediário (*IL*)
+- [ ] Analisador semântico (*checker*)
+- [ ] Gerador de código intermediário (*MSIL/CIL*)
 
 ## Especificação léxica (*tokens*)
 
