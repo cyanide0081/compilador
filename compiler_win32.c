@@ -239,10 +239,12 @@ static inline void text_buf_free(TextBuf *buf)
     FillMemory(buf, sizeof(*buf), 0);
 }
 
+#if 0
 static inline isize text_buf_cap(TextBuf *buf)
 {
     return buf->size / sizeof(*buf->data);
 }
+#endif
 
 static inline void text_buf_copy_from(TextBuf *buf, u16 *src)
 {
@@ -997,7 +999,8 @@ static inline void Win32SetLogAreaText(const u16 *txt)
 static inline void Win32SetStatusbarText(TextBuf *buf)
 {
     TextBuf display_buf = {0};
-    text_buf_copy_from(&display_buf, buf->data);
+    isize prefix_len = UTF16_STATIC_LENGTH(L"\\\\?\\");
+    text_buf_copy_from(&display_buf, buf->data + prefix_len);
     text_buf_trim_start(&display_buf, MAX_STATUSBAR_TEXT_LEN);
     SetWindowTextW(g_controls.statusbar, display_buf.data);
     text_buf_free(&display_buf);
@@ -1035,6 +1038,9 @@ static inline CyString cy_string_from_text_editor(void)
 }
 
 #define MOUSEMOVE_TIMEOUT_MS (1000 / 200)
+
+#define OFN_FLAGS OFN_ENABLEHOOK | OFN_HIDEREADONLY | \
+    OFN_LONGNAMES | OFN_NONETWORKBUTTON
 
 LRESULT CALLBACK Win32WindowCallback(
     HWND window,
@@ -1156,10 +1162,10 @@ LRESULT CALLBACK Win32WindowCallback(
             OPENFILENAMEW ofn = {
                 .lStructSize = sizeof(OPENFILENAMEW),
                 .hwndOwner = window,
-                .Flags = OFN_ENABLEHOOK,
+                .Flags = OFN_FLAGS,
                 .lpfnHook = Win32DialogHook,
                 .lpstrFile = temp_buf,
-                .nMaxFile = UTF16_STATIC_LENGTH(temp_buf),
+                .nMaxFile = CY_STATIC_ARR_LEN(temp_buf),
                 .lpstrFilter = file_filter,
                 .nFilterIndex = 2,
             };
@@ -1171,12 +1177,8 @@ LRESULT CALLBACK Win32WindowCallback(
                 return 0;
             }
 
-            // TODO(cya): prepend long path prefix to file path ("\\\\?\\")
-            text_buf_copy_from(&g_bufs.file_path, ofn.lpstrFile);
-            g_state.scratch_file = false;
-
             HANDLE file = CreateFileW(
-                g_bufs.file_path.data,
+                ofn.lpstrFile,
                 GENERIC_READ,
                 FILE_SHARE_READ,
                 NULL,
@@ -1188,6 +1190,14 @@ LRESULT CALLBACK Win32WindowCallback(
                 Win32ErrorDialog(L"Erro ao abrir arquivo");
                 return 0;
             }
+
+            u16 final_path[PAGE_SIZE] = {0};
+            GetFinalPathNameByHandleW(
+                file, final_path, CY_STATIC_ARR_LEN(final_path), 0
+            );
+
+            text_buf_copy_from(&g_bufs.file_path, final_path);
+            g_state.scratch_file = false;
 
             LARGE_INTEGER file_size;
             GetFileSizeEx(file, &file_size);
@@ -1230,16 +1240,21 @@ LRESULT CALLBACK Win32WindowCallback(
             page_free(utf8_buf);
         } break;
         case BUTTON_FILE_SAVE: {
-            if (g_state.scratch_file) {
+            u16 temp_buf[PAGE_SIZE] = {0};
+            if (!g_state.scratch_file) {
+                u16 *path = g_bufs.file_path.data;
+                isize size = g_bufs.file_path.len * sizeof(*path);
+                cy_mem_copy(temp_buf, path, size);
+            } else {
                 u16 *file_filter =
                     L"Qualquer (*.*)\0*.*\0Arquivo de texto (*.txt)\0*.txt\0\0";
                 OPENFILENAMEW ofn = {
                     .lStructSize = sizeof(OPENFILENAMEW),
                     .hwndOwner = window,
-                    .Flags = OFN_ENABLEHOOK,
+                    .Flags = OFN_FLAGS,
                     .lpfnHook = Win32DialogHook,
-                    .lpstrFile = g_bufs.file_path.data,
-                    .nMaxFile = text_buf_cap(&g_bufs.file_path),
+                    .lpstrFile = temp_buf,
+                    .nMaxFile = CY_STATIC_ARR_LEN(temp_buf),
                     .lpstrFilter = file_filter,
                     .nFilterIndex = 2,
                 };
@@ -1251,29 +1266,25 @@ LRESULT CALLBACK Win32WindowCallback(
                     return 0;
                 }
 
-                text_buf_recalc_len(&g_bufs.file_path);
-                g_state.scratch_file = false;
-
                 u16 *ext = ofn.lpstrFile + ofn.nFileExtension;
                 if (ofn.nFilterIndex == 2 && *ext == 0) {
                     const u16 EXT[] = L"txt";
                     const isize ext_len = UTF16_STATIC_LENGTH(EXT);
-                    const isize new_len = g_bufs.file_path.len + ext_len + 1;
+                    const isize new_len =  + ext_len;
 
-                    text_buf_resize(&g_bufs.file_path, new_len);
+                    ASSERT(CY_STATIC_ARR_LEN(temp_buf) > new_len);
+
                     if (ofn.nFileExtension > 0 && *(ext - 1) != '.') {
                         *(ext++) = '.';
-                        g_bufs.file_path.len += 1;
                     }
 
                     utf16_concat(ext, EXT, ext_len);
-                    g_bufs.file_path.len += ext_len;
                 }
             }
 
             CyString src_code = cy_string_from_text_editor();
             HANDLE file = CreateFileW(
-                g_bufs.file_path.data,
+                temp_buf,
                 GENERIC_WRITE, FILE_SHARE_WRITE,
                 NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
                 NULL
@@ -1282,6 +1293,14 @@ LRESULT CALLBACK Win32WindowCallback(
                 Win32ErrorDialog(L"Erro ao salvar arquivo");
                 goto fsave_cleanup;
             }
+
+            u16 final_path[PAGE_SIZE] = {0};
+            GetFinalPathNameByHandleW(
+                file, final_path, CY_STATIC_ARR_LEN(final_path), 0
+            );
+            text_buf_copy_from(&g_bufs.file_path, final_path);
+            text_buf_recalc_len(&g_bufs.file_path);
+            g_state.scratch_file = false;
 
             isize bytes_written = 0;
             b32 written = WriteFile(
