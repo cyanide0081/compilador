@@ -1118,20 +1118,18 @@ static GrammarRule g_ll1_table[LL1_ROW_COUNT][LL1_COL_COUNT] = {
     AST_KIND(MAIN, struct { \
         AstNode *body; \
     }) \
+\
+AST_KIND(_LIST_BEGIN, isize) \
     AST_KIND(IDENT_LIST, struct { \
         AstList list; \
     }) \
-    AST_KIND(VAR_DECL, struct { \
-        AstNode *ident_list; \
-    }) \
-    AST_KIND(ASSIGN_STMT, struct { \
-        AstNode *ident_list; \
-        AstNode *expr; \
-    }) \
-    AST_KIND(READ_STMT, struct { \
-        AstNode *input_list; \
-    }) \
     AST_KIND(INPUT_LIST, struct { \
+        AstList list; \
+    }) \
+    AST_KIND(EXPR_LIST, struct { \
+        AstList list; \
+    }) \
+    AST_KIND(STMT_LIST, struct { \
         AstList list; \
     }) \
     AST_KIND(INPUT_ARG, struct { \
@@ -1141,12 +1139,22 @@ static GrammarRule g_ll1_table[LL1_ROW_COUNT][LL1_COL_COUNT] = {
     AST_KIND(INPUT_PROMPT, struct { \
         Token string; \
     }) \
+    AST_KIND(VAR_DECL, struct { \
+        AstNode *ident_list; \
+    }) \
+AST_KIND(_LIST_END, isize) \
+\
+AST_KIND(_STMT_BEGIN, isize) \
+    AST_KIND(ASSIGN_STMT, struct { \
+        AstNode *ident_list; \
+        AstNode *expr; \
+    }) \
+    AST_KIND(READ_STMT, struct { \
+        AstNode *input_list; \
+    }) \
     AST_KIND(WRITE_STMT, struct { \
         Token keyword; \
         AstNode *expr_list; \
-    }) \
-    AST_KIND(EXPR_LIST, struct { \
-        AstList list; \
     }) \
     AST_KIND(IF_STMT, struct { \
         AstNode *body; \
@@ -1154,14 +1162,14 @@ static GrammarRule g_ll1_table[LL1_ROW_COUNT][LL1_COL_COUNT] = {
         AstNode *else_stmt; \
         b32 is_root; \
     }) \
-    AST_KIND(STMT_LIST, struct { \
-        AstList list; \
-    }) \
     AST_KIND(REPEAT_STMT, struct { \
         AstNode *body; \
         Token keyword; \
         AstNode *expr; \
     }) \
+AST_KIND(_STMT_END, isize) \
+\
+AST_KIND(_EXPR_BEGIN, isize) \
     AST_KIND(BINARY_EXPR, struct { \
         AstNode *left; \
         AstNode *right; \
@@ -1174,7 +1182,14 @@ static GrammarRule g_ll1_table[LL1_ROW_COUNT][LL1_COL_COUNT] = {
     AST_KIND(PAREN_EXPR, struct { \
         AstNode *expr; \
     }) \
+AST_KIND(_EXPR_END, isize) \
     AST_KIND(KIND_COUNT, isize)
+
+#define IS_IN_RANGE_IN(n, lo, hi) (n >= lo && n <= hi)
+#define IS_IN_RANGE_EX(n, lo, hi) (n > lo && n < hi)
+
+#define AST_KIND_IS_OF_CLASS(kind, c) \
+    IS_IN_RANGE_EX(kind, AST_KIND__##c##_BEGIN, AST_KIND__##c##_END)
 
 #define AST_KIND_PREFIX(t) AST_KIND_##t
 typedef enum {
@@ -1245,18 +1260,6 @@ static inline AstList ast_list_init(CyAllocator a)
     }  \
 } (void)0
 
-static inline void ast_binary_expr_reduce(CyAllocator a, AstNode *expr)
-{
-    CY_ASSERT(expr->kind == AST_KIND_BINARY_EXPR);
-
-    AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
-    CY_ASSERT(e->right == NULL);
-
-    AstNode *child = e->left;
-    cy_mem_copy(expr, child, sizeof(*expr));
-    cy_free(a, child);
-}
-
 static inline void ast_list_append_node(AstList *l, AstNode *node)
 {
     if (l->len == l->cap) {
@@ -1270,6 +1273,11 @@ static inline void ast_list_append_node(AstList *l, AstNode *node)
     }
 
     l->data[l->len++] = node;
+}
+
+static inline AstNode *ast_list_get_last_node(AstList *l)
+{
+    return l->data[l->len - 1];
 }
 
 static inline void ast_list_shrink(AstList *l)
@@ -1287,35 +1295,118 @@ static inline void ast_list_shrink(AstList *l)
     l->cap = new_cap;
 }
 
-static inline void ast_binary_expr_insert_node(AstNode *expr, AstNode *node)
+static inline void ast_expr_insert_node(AstNode *expr, AstNode *node)
 {
-    AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
-    CY_ASSERT(e->left == NULL || e->right == NULL);
+    switch (expr->kind) {
+    case AST_KIND_UNARY_EXPR:
+    case AST_KIND_PAREN_EXPR: {
+        AST_PAREN_EXPR *e = &expr->u.PAREN_EXPR;
+        CY_ASSERT(e->expr == NULL);
 
-    if (e->left == NULL) {
-        e->left = node;
-    } else {
-        e->right = node;
+        e->expr = node;
+    } break;
+    case AST_KIND_BINARY_EXPR: {
+        AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
+        CY_ASSERT(e->left == NULL || e->right == NULL);
+
+        if (e->left == NULL) {
+            e->left = node;
+        } else {
+            e->right = node;
+        }
+    } break;
+    default: break;
     }
 }
 
-static inline void ast_binary_expr_insert_lhs(AstNode *expr, AstNode *node)
+//ast_expr_insert_token
+
+static inline void ast_binary_expr_reduce(CyAllocator a, AstNode *expr)
 {
-    AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
-    CY_ASSERT(e->left == NULL);
-
-    e->left = node;
-}
-
-static inline void ast_binary_expr_insert_rhs(
-    AstNode *expr, Token *op, AstNode *node
-) {
+    CY_ASSERT(expr->kind == AST_KIND_BINARY_EXPR);
 
     AST_BINARY_EXPR *e = &expr->u.BINARY_EXPR;
     CY_ASSERT(e->right == NULL);
 
-    e->op = *op;
-    e->right = node;
+    AstNode *child = e->left;
+    cy_mem_copy(expr, child, sizeof(*expr));
+    cy_free(a, child);
+}
+
+static inline void ast_node_read_token(AstNode *node, Token *tok)
+{
+    if (node == NULL) {
+        return;
+    }
+
+    Token *dest = NULL;
+    switch (node->kind) {
+    case AST_KIND_IDENT_LIST: {
+        if (tok->kind != C_TOKEN_IDENT) {
+            return;
+        }
+
+        AstNode *ident_node = ast_list_get_last_node(&node->u.IDENT_LIST.list);
+        dest = &ident_node->u.IDENT.tok;
+    } break;
+    case AST_KIND_INPUT_LIST: {
+        if (tok->kind != C_TOKEN_IDENT) {
+            return;
+        }
+
+        AstNode *arg_node = ast_list_get_last_node(&node->u.INPUT_LIST.list);
+        dest = &arg_node->u.INPUT_ARG.ident;
+    } break;
+    case AST_KIND_INPUT_PROMPT: {
+        if (tok->kind != C_TOKEN_STRING) {
+            return;
+        }
+
+        dest = &node->u.INPUT_PROMPT.string;
+    } break;
+    case AST_KIND_WRITE_STMT: {
+        if (!IS_IN_RANGE_IN(tok->kind, C_TOKEN_WRITE, C_TOKEN_WRITELN)) {
+            return;
+        }
+
+        dest = &node->u.WRITE_STMT.keyword;
+    } break;
+    case AST_KIND_REPEAT_STMT: {
+        if (!IS_IN_RANGE_IN(tok->kind, C_TOKEN_REPEAT, C_TOKEN_UNTIL)) {
+            return;
+        }
+
+        dest = &node->u.REPEAT_STMT.keyword;
+    } break;
+    case AST_KIND_LITERAL: {
+        switch (tok->kind) {
+        case C_TOKEN_INTEGER:
+        case C_TOKEN_FLOAT:
+        case C_TOKEN_STRING:
+        case C_TOKEN_TRUE:
+        case C_TOKEN_FALSE: {
+            dest = &node->u.LITERAL.tok;
+        } break;
+        default: return;
+        }
+    } break;
+    case AST_KIND_IDENT: {
+        if (tok->kind != C_TOKEN_IDENT) {
+            return;
+        }
+
+        dest = &node->u.IDENT.tok;
+    } break;
+    case AST_KIND_UNARY_EXPR: {
+        dest = &node->u.UNARY_EXPR.op;
+    } break;
+    case AST_KIND_BINARY_EXPR: {
+        dest = &node->u.BINARY_EXPR.op;
+    } break;
+    default: return;
+    }
+
+    cy_mem_copy(dest, tok, sizeof(*dest));
 }
 
 typedef struct {
@@ -1480,11 +1571,11 @@ static CyString reachable_terminals(CyAllocator a, NonTerminal n)
     return str;
 }
 
-static CyString parser_create_error_msg(CyAllocator a, Parser *p)
+static CyString parser_append_error_msg(CyString msg, Parser *p)
 {
-    CyString msg = cy_string_create_reserve(a, 0x100);
     msg = append_error_prefix(msg, p->err.found.pos);
 
+    CyAllocator a = CY_STRING_HEADER(msg)->alloc;
     Token found = p->err.found;
     String found_str;
     switch (found.kind) {
@@ -1525,11 +1616,9 @@ static CyString parser_create_error_msg(CyAllocator a, Parser *p)
     );
     cy_string_free(expected_str);
 
-    msg = cy_string_shrink(msg);
     return msg;
 }
 
-// NOTE(cya): must pass a stack allocator!
 static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
 {
     ParserSymbol *items = NULL;
@@ -1576,7 +1665,9 @@ static Ast parse(CyAllocator a, Parser *p)
                 break;
             }
 
+            ast_node_read_token(p->cur_node, p->read_tok);
             parser_stack_pop(p);
+
             p->read_tok += 1;
             continue;
         } else if (stack_top->is_frame_start) {
@@ -1704,8 +1795,6 @@ static Ast parse(CyAllocator a, Parser *p)
             CY_ASSERT(p->cur_node->kind == AST_KIND_IDENT_LIST);
 
             AstNode *ident_node = AST_NODE_ALLOC(a, IDENT);
-            parser_copy_read_tok(p, &ident_node->u.IDENT.tok);
-
             AstList *l = &p->cur_node->u.IDENT_LIST.list;
             ast_list_append_node(l, ident_node);
         } break;
@@ -1795,8 +1884,6 @@ static Ast parse(CyAllocator a, Parser *p)
             CY_ASSERT(p->cur_node->kind == AST_KIND_INPUT_LIST);
 
             new_node = AST_NODE_ALLOC(a, INPUT_ARG);
-            parser_copy_read_tok(p, &new_node->u.INPUT_ARG.ident);
-
             AstList *l = &p->cur_node->u.INPUT_LIST.list;
             ast_list_append_node(l, new_node);
         } break;
@@ -1819,8 +1906,6 @@ static Ast parse(CyAllocator a, Parser *p)
             CY_ASSERT(p->cur_node->kind == AST_KIND_INPUT_ARG);
 
             new_node = AST_NODE_ALLOC(a, INPUT_PROMPT);
-            parser_copy_read_tok(p, &new_node->u.INPUT_PROMPT.string);
-
             p->cur_node->u.INPUT_ARG.prompt = new_node;
         } break;
         case GR_26: { // <cte_str_opt> ::= î
@@ -1838,15 +1923,11 @@ static Ast parse(CyAllocator a, Parser *p)
             parser_stack_push_token(p, C_TOKEN_WRITE, NULL);
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_WRITE_STMT);
-
-            parser_copy_read_tok(p, &p->cur_node->u.WRITE_STMT.keyword);
         } break;
         case GR_29: { // <cmd_saida_tipo> ::= writeln
             parser_stack_push_token(p, C_TOKEN_WRITELN, NULL);
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_WRITE_STMT);
-
-            parser_copy_read_tok(p, &p->cur_node->u.WRITE_STMT.keyword);
         } break;
         case GR_30: { // <lista_expr> ::= <expr> <lista_expr_mul>
             parser_stack_push_non_terminal(p, NT_EXPR_LIST_R, NULL);
@@ -1943,8 +2024,6 @@ static Ast parse(CyAllocator a, Parser *p)
             parser_stack_push_token(p, C_TOKEN_WHILE, NULL);
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_REPEAT_STMT);
-
-            parser_copy_read_tok(p, &p->cur_node->u.REPEAT_STMT.keyword);
         } break;
         case GR_43: { // <cmd_rep_tipo> ::= until
             parser_stack_push_token(p, C_TOKEN_UNTIL, NULL);
@@ -1958,17 +2037,14 @@ static Ast parse(CyAllocator a, Parser *p)
             parser_stack_push_non_terminal(p, NT_ELEMENT, new_node);
 
             CY_ASSERT(
-                p->cur_node->kind == AST_KIND_EXPR_LIST ||
                 p->cur_node->kind == AST_KIND_ASSIGN_STMT ||
                 p->cur_node->kind == AST_KIND_IF_STMT ||
-                p->cur_node->kind == AST_KIND_REPEAT_STMT
+                p->cur_node->kind == AST_KIND_REPEAT_STMT ||
+                p->cur_node->kind == AST_KIND_EXPR_LIST ||
+                p->cur_node->kind == AST_KIND_PAREN_EXPR
             );
 
             switch (p->cur_node->kind) {
-            case AST_KIND_EXPR_LIST: {
-                AstList *l = &p->cur_node->u.EXPR_LIST.list;
-                ast_list_append_node(l, new_node);
-            } break;
             case AST_KIND_ASSIGN_STMT: {
                 p->cur_node->u.ASSIGN_STMT.expr = new_node;
             } break;
@@ -1977,6 +2053,13 @@ static Ast parse(CyAllocator a, Parser *p)
             } break;
             case AST_KIND_REPEAT_STMT: {
                 p->cur_node->u.REPEAT_STMT.expr = new_node;
+            } break;
+            case AST_KIND_EXPR_LIST: {
+                AstList *l = &p->cur_node->u.EXPR_LIST.list;
+                ast_list_append_node(l, new_node);
+            } break;
+            case AST_KIND_PAREN_EXPR: {
+                p->cur_node->u.PAREN_EXPR.expr = new_node;
             } break;
             default: break;
             }
@@ -1990,9 +2073,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
-            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_46: { // <expr_log> ::= "||" <elemento> <expr_log>
             new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
@@ -2003,9 +2084,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
-            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_47: { // <expr_log> ::= î
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
@@ -2013,40 +2092,34 @@ static Ast parse(CyAllocator a, Parser *p)
             ast_binary_expr_reduce(a, p->cur_node);
         } break;
         case GR_48: { // <elemento> ::= <relacional>
-            parser_stack_push_non_terminal(p, NT_RELATIONAL, new_node);
+            parser_stack_push_non_terminal(p, NT_RELATIONAL, NULL);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
         } break;
         case GR_49: { // <elemento> ::= true
             parser_stack_push_token(p, C_TOKEN_TRUE, NULL);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
             new_node = AST_NODE_ALLOC(a, LITERAL);
-            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_50: { // <elemento> ::= false
             parser_stack_push_token(p, C_TOKEN_FALSE, NULL);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
             new_node = AST_NODE_ALLOC(a, LITERAL);
-            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_51: { // <elemento> ::= "!" <elemento>
             new_node = AST_NODE_ALLOC(a, UNARY_EXPR);
-            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
-
             parser_stack_push_non_terminal(p, NT_ELEMENT, new_node);
             parser_stack_push_token(p, C_TOKEN_NOT, new_node);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_52: { // <relacional> ::= <aritmetica> <relacional_mul>
             new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
@@ -2054,17 +2127,15 @@ static Ast parse(CyAllocator a, Parser *p)
             parser_stack_push_non_terminal(p, NT_RELATIONAL_R, new_node);
             parser_stack_push_non_terminal(p, NT_ARITHMETIC, new_node);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_53: { // <relacional_mul> ::= <operador_relacional> <aritmetica>
             parser_stack_push_non_terminal(p, NT_ARITHMETIC, NULL);
             parser_stack_push_non_terminal(p, NT_RELATIONAL_OP, NULL);
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
-
-            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
         } break;
         case GR_54: { // <relacional_mul> ::= î
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
@@ -2099,7 +2170,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_60: { // <aritmetica_mul> ::= "+" <termo> <aritmetica_mul>
             new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
@@ -2110,9 +2181,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
-            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_61: { // <aritmetica_mul> ::= "-" <termo> <aritmetica_mul>
             new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
@@ -2123,9 +2192,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
-            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_62: { // <aritmetica_mul> ::= î
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
@@ -2140,7 +2207,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_64: { // <termo_mul> ::= "*" <fator> <termo_mul>
             new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
@@ -2151,9 +2218,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
-            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_65: { // <termo_mul> ::= "/" <fator> <termo_mul>
             new_node = AST_NODE_ALLOC(a, BINARY_EXPR);
@@ -2164,9 +2229,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
-            parser_copy_read_tok(p, &p->cur_node->u.BINARY_EXPR.op);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_66: { // <termo_mul> ::= î
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
@@ -2176,53 +2239,45 @@ static Ast parse(CyAllocator a, Parser *p)
         case GR_67: { // <fator> ::= identificador
             parser_stack_push_token(p, C_TOKEN_IDENT, NULL);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
             new_node = AST_NODE_ALLOC(a, IDENT);
-            parser_copy_read_tok(p, &new_node->u.IDENT.tok);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_68: { // <fator> ::= constante_int
             parser_stack_push_token(p, C_TOKEN_INTEGER, NULL);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
             new_node = AST_NODE_ALLOC(a, LITERAL);
-            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_69: { // <fator> ::= constante_float
             parser_stack_push_token(p, C_TOKEN_FLOAT, NULL);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
             new_node = AST_NODE_ALLOC(a, LITERAL);
-            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_70: { // <fator> ::= constante_string
             parser_stack_push_token(p, C_TOKEN_STRING, NULL);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
             new_node = AST_NODE_ALLOC(a, LITERAL);
-            parser_copy_read_tok(p, &new_node->u.LITERAL.tok);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_71: { // <fator> ::= "(" <expr> ")"
             parser_stack_push_token(p, C_TOKEN_PAREN_CLOSE, NULL);
             parser_stack_push_non_terminal(p, NT_EXPR, NULL);
             parser_stack_push_token(p, C_TOKEN_PAREN_OPEN, NULL);
 
-            CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
+            CY_ASSERT(AST_KIND_IS_OF_CLASS(p->cur_node->kind, EXPR));
 
             new_node = AST_NODE_ALLOC(a, PAREN_EXPR);
 
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_72: { // <fator> ::= "+" <fator>
             parser_stack_push_non_terminal(p, NT_FACTOR, NULL);
@@ -2231,9 +2286,7 @@ static Ast parse(CyAllocator a, Parser *p)
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
             new_node = AST_NODE_ALLOC(a, UNARY_EXPR);
-            parser_copy_read_tok(p, &new_node->u.UNARY_EXPR.op);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_73: { // <fator> ::= "-" <fator>
             parser_stack_push_non_terminal(p, NT_FACTOR, NULL);
@@ -2242,9 +2295,7 @@ static Ast parse(CyAllocator a, Parser *p)
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
             new_node = AST_NODE_ALLOC(a, UNARY_EXPR);
-            parser_copy_read_tok(p, &new_node->u.UNARY_EXPR.op);
-
-            ast_binary_expr_insert_node(p->cur_node, new_node);
+            ast_expr_insert_node(p->cur_node, new_node);
         } break;
         default: {
         } break;
@@ -2280,26 +2331,25 @@ CyString compile(String src_code)
 
     // TODO(cya): use pool allocator when implemented
     Ast a = parse(temp_allocator, &p);
-    if (p.err.kind != P_ERR_NONE) {
-        return parser_create_error_msg(heap_allocator, &p);
-    }
 
     CY_UNUSED(a); // TODO(cya): remove when the ast is actually used
 
     isize init_cap = 0x100;
     CyString output = cy_string_create_reserve(heap_allocator, init_cap);
-    output = cy_string_append_c(output, "programa compilado com sucesso");
+    if (p.err.kind != P_ERR_NONE) {
+        output = parser_append_error_msg(output, &p);
+    } else {
+        output = cy_string_append_c(output, "programa compilado com sucesso");
 
 #ifdef CY_DEBUG
-    CyTicks elapsed = cy_ticks_elapsed(start, cy_ticks_query());
-    f64 elapsed_us = cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS);
-    output = cy_string_append_fmt(output, " em %.01fμs", elapsed_us);
+        CyTicks elapsed = cy_ticks_elapsed(start, cy_ticks_query());
+        f64 elapsed_us = cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS);
+        output = cy_string_append_fmt(output, " em %.01fμs", elapsed_us);
 #endif
-
-    output = cy_string_shrink(output);
+    }
 
     cy_stack_deinit(&parser_stack);
     cy_arena_deinit(&tokenizer_arena);
 
-    return output;
+    return cy_string_shrink(output);
 }
