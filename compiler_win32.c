@@ -21,6 +21,11 @@ typedef struct {
 static GlobalBufs g_bufs;
 
 typedef struct {
+    CyAllocator page;
+} GlobalAllocators;
+static GlobalAllocators g_allocs;
+
+typedef struct {
     i32 first_visible_line;
     i32 last_visible_line;
     i32 min_x;
@@ -42,6 +47,7 @@ static GlobalState g_state = {
 #define STATIC_ASSERT(cond) CY_STATIC_ASSERT(cond)
 #define UTF16_STATIC_LENGTH(str) CY_STATIC_STR_LEN(str)
 
+#if 0
 static inline isize round_up(isize size, isize target)
 {
     ASSERT((target & (target - 1)) == 0); // is power of 2
@@ -49,6 +55,7 @@ static inline isize round_up(isize size, isize target)
     uintptr mod = size & (target - 1);
     return mod ? size + target - mod : (size == 0) ? target : size;
 }
+#endif
 
 static inline isize utf16_length(const u16* buf)
 {
@@ -72,6 +79,7 @@ static inline u16 *utf16_concat(
     return dst + len;
 }
 
+#if 0
 static inline void *page_alloc(isize bytes)
 {
     return VirtualAlloc(
@@ -84,6 +92,7 @@ static inline void page_free(void *memory)
 {
     if (memory != NULL) VirtualFree(memory, 0, MEM_RELEASE);
 }
+#endif
 
 static u16 *Win32BuildErrorMessage(const u16 *preface)
 {
@@ -97,30 +106,28 @@ static u16 *Win32BuildErrorMessage(const u16 *preface)
         (LPWSTR)&error_msg,
         0, NULL
     );
+    if (error_msg == NULL) {
+        ExitProcess(GetLastError());
+    }
 
-    const u16 concat[] = L": ";
-    isize msg_len = utf16_length(preface);
-    isize concat_len = UTF16_STATIC_LENGTH(concat);
-    isize error_msg_len = utf16_length(error_msg);
-    isize final_msg_len = msg_len + concat_len + error_msg_len;
-    u16 *final_msg = page_alloc((final_msg_len + 1) * sizeof(*final_msg));
+    CyString16 final_msg = cy_string_16_create_reserve(g_allocs.page, 0x100);
     if (final_msg == NULL) {
         ExitProcess(GetLastError());
     }
 
-    u16 *end = utf16_concat(final_msg, preface, msg_len);
-    end = utf16_concat(end, concat, concat_len);
-    end = utf16_concat(end, error_msg, error_msg_len);
+    final_msg = cy_string_16_append_fmt(
+        final_msg, L"%ls: %ls", preface, error_msg
+    );
 
     LocalFree(error_msg);
-    return final_msg;
+    return cy_string_16_shrink(final_msg);
 }
 
 static inline void Win32ErrorDialog(const u16 *msg)
 {
-    u16 *final_msg = Win32BuildErrorMessage(msg);
+    CyString16 final_msg = Win32BuildErrorMessage(msg);
     MessageBoxW(NULL, final_msg, L"Erro", MB_OK | MB_ICONWARNING);
-    page_free(final_msg);
+    cy_string_16_free(final_msg);
 }
 
 static inline void Win32FatalErrorDialog(const u16 *msg)
@@ -136,47 +143,48 @@ static inline void Win32FatalErrorDialog(const u16 *msg)
 #define WIN32_FATAL_MEM_ERROR_DIALOG() \
     Win32FatalErrorDialog(L"Erro ao alocar memória")
 
-static inline u16 *Win32UTF8toUTF16(const char *str, isize len, isize *len_out)
+static CyString16 Win32UTF8toUTF16(CyString str)
 {
+    CY_VALIDATE_PTR(str);
+    
+    CyAllocator a = CY_STRING_HEADER(str)->alloc;
     isize len_utf16 = MultiByteToWideChar(
         CP_UTF8, 0,
-        str, len,
+        str, cy_string_len(str),
         NULL, 0
     );
-    isize size_utf16 = (len_utf16 + 1) * sizeof(u16);
-    u16 *str_utf16 = page_alloc(size_utf16);
-    if (str_utf16 == NULL) {
-        return NULL;
-    }
+    CyString16 str_utf16 = cy_string_16_create_reserve(a, len_utf16);
+    CY_VALIDATE_PTR(str_utf16);
 
     isize res = MultiByteToWideChar(
         CP_UTF8, 0,
-        str, len + 1,
-        str_utf16, len_utf16 + 1
+        str, cy_string_len(str),
+        str_utf16, len_utf16
     );
     if (res == 0) {
         Win32ErrorDialog(L"Erro ao converter texto para UTF-16");
-        *len_out = 0;
         return NULL;
     }
 
+    cy__string_16_set_len(str_utf16, len_utf16);
     str_utf16[len_utf16] = '\0';
-    *len_out = len_utf16;
     return str_utf16;
 }
 
-static inline CyString Win32UTF16toUTF8(const u16 *str, isize len)
+static CyString Win32UTF16toUTF8(CyString16 str)
 {
+    CY_VALIDATE_PTR(str);
+    
+    CyAllocator a = CY_STRING_HEADER(str)->alloc;
+    isize len = cy_string_16_len(str);
     isize len_utf8 = WideCharToMultiByte(
         CP_UTF8, 0,
         str, len,
         NULL, 0,
         NULL, NULL
     );
-    CyString str_utf8 = cy_string_create_reserve(cy_heap_allocator(), len_utf8);
-    if (str_utf8 == NULL) {
-        return NULL;
-    }
+    CyString str_utf8 = cy_string_create_reserve(a, len_utf8);
+    CY_VALIDATE_PTR(str_utf8);
 
     isize res = WideCharToMultiByte(
         CP_UTF8, 0,
@@ -195,6 +203,7 @@ static inline CyString Win32UTF16toUTF8(const u16 *str, isize len)
     return str_utf8;
 }
 
+#if 0
 static TextBuf text_buf_alloc(isize chars)
 {
     isize size = round_up((chars + 1) * sizeof(u16), PAGE_SIZE);
@@ -266,6 +275,7 @@ static inline void text_buf_clear(TextBuf *buf)
     FillMemory(buf->data, buf->size, 0);
     buf->len = 0;
 }
+#endif
 
 static void utf16_insert_dots(u16 *str, b32 null_terminate)
 {
@@ -639,10 +649,7 @@ static inline LineEnding line_ending_identify(const u16 *str)
     }
 }
 
-typedef struct {
-    u16 *str;
-    isize len;
-} String16;
+typedef CyString16View String16;
 
 typedef struct {
     String16 string;
@@ -720,10 +727,8 @@ static void utf16_convert_newlines(LineScanner *scanner, u16 *dst)
 
 static void text_buf_convert_newlines(TextBuf *dst, u16 *src, isize len)
 {
-    LineScanner scanner = line_scanner_build(&(String16){
-        .str = src,
-        .len = len,
-    });
+    String16 view = cy_string_16_view_create_len(src, len);
+    LineScanner scanner = line_scanner_build(&view);
 
     text_buf_clear(dst);
     text_buf_resize(dst, scanner.crlf_len);
@@ -1024,19 +1029,16 @@ UINT_PTR Win32DialogHook(
     return FALSE;
 }
 
-static inline CyString cy_string_from_text_editor(void)
+static inline CyString cy_string_from_text_editor(CyAllocator a)
 {
     isize len = GetWindowTextLengthW(g_controls.text_editor);
-    u16 *text = page_alloc((len + 1) * sizeof(*text));
-    GetWindowTextW(
-        g_controls.text_editor,
-        text, len + 1
-    );
+    CyString16 utf16 = cy_string_16_create_reserve(a, len);
+    GetWindowTextW(g_controls.text_editor, utf16, len + 1);
+    cy__string_16_set_len(utf16, len);
 
-    CyString str = Win32UTF16toUTF8(text, len);
-
-    page_free(text);
-    return str;
+    CyString utf8 = Win32UTF16toUTF8(utf16);
+    cy_string_16_free(utf16);
+    return utf8;
 }
 
 #define MOUSEMOVE_TIMEOUT_MS (1000 / 200)
@@ -1204,9 +1206,9 @@ LRESULT CALLBACK Win32WindowCallback(
             LARGE_INTEGER file_size;
             GetFileSizeEx(file, &file_size);
 
-            u16 *utf16_buf = NULL;
+            CyString16 utf16_buf = NULL;
             isize utf8_len = file_size.QuadPart;
-            char *utf8_buf = page_alloc(utf8_len + 1);
+            CyString utf8_buf = cy_string_create_reserve(g_allocs.page, utf8_len);
             if (utf8_buf == NULL) {
                 Win32ErrorDialog(L"Erro ao alocar memória temporária");
             }
@@ -1227,11 +1229,10 @@ LRESULT CALLBACK Win32WindowCallback(
                 goto fopen_cleanup;
             }
 
-            isize utf16_len;
-            utf16_buf = Win32UTF8toUTF16(utf8_buf, utf8_len, &utf16_len);
+            cy__string_set_len(utf8_buf, utf8_len);
+            utf16_buf = Win32UTF8toUTF16(utf8_buf);
 
-            TextBuf buf = text_buf_alloc(utf16_len);
-            text_buf_convert_newlines(&buf, utf16_buf, utf16_len);
+            CyString16 final_buf = text_convert_newlines(utf16_buf);
 
             SetWindowTextW(g_controls.text_editor, buf.data);
             text_buf_free(&buf);
@@ -1287,7 +1288,7 @@ LRESULT CALLBACK Win32WindowCallback(
                 }
             }
 
-            CyString src_code = cy_string_from_text_editor();
+            CyString src_code = cy_string_from_text_editor(cy_heap_allocator());
             HANDLE file = CreateFileW(
                 temp_buf,
                 GENERIC_WRITE, FILE_SHARE_WRITE,
@@ -1337,7 +1338,7 @@ LRESULT CALLBACK Win32WindowCallback(
             SendMessageW(g_controls.text_editor, WM_CUT, 0, 0);
         } break;
         case BUTTON_COMPILE: {
-            CyString src_code = cy_string_from_text_editor();
+            CyString src_code = cy_string_from_text_editor(cy_heap_allocator());
             CyString output = NULL;
             u16 *output_utf16 = NULL;
 
@@ -1448,7 +1449,6 @@ int WINAPI wWinMain(
     (void)instance, (void)prev_instance, (void)cmd_line, (void)cmd_show;
 
     g_bufs.lines = text_buf_alloc((MAX_LINE_DIGITS + 2) * 20);
-    // g_bufs.editor = text_buf_alloc(0x1000);
     g_bufs.file_path = text_buf_alloc(MAX_PATH);
 
     const u16 *CLASS_NAME = L"compiler_gui_window";

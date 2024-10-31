@@ -571,6 +571,13 @@ CY_DEF CyString16 cy_string_16_reserve_space_for(
 CY_DEF CyString16 cy_string_16_shrink(CyString16 str);
 CY_DEF void cy_string_16_free(CyString16 str);
 
+CY_DEF CyString16 cy_string_16_append_len(CyString16 str, const wchar_t *other, isize len);
+CY_DEF CyString16 cy_string_16_append(CyString16 str, const CyString16 other);
+CY_DEF CyString16 cy_string_16_append_c(CyString16 str, const wchar_t *other);
+CY_DEF CyString16 cy_string_16_append_rune(CyString16 str, Rune r);
+CY_DEF CyString16 cy_string_16_append_fmt(CyString16 str, const wchar_t *fmt, ...);
+CY_DEF CyString16 cy_string_16_append_view(CyString16 str, CyString16View view);
+
 CY_DEF CyString16View cy_string_16_view_create_len(const wchar_t *str, isize len);
 CY_DEF CyString16View cy_string_16_view_create(CyString16 str);
 CY_DEF CyString16View cy_string_16_view_create_c(const wchar_t *str);
@@ -1757,7 +1764,7 @@ inline CyString cy_string_append_c(CyString str, const char *other)
     return cy_string_append_len(str, other, cy_str_len(other));
 }
 
-CyString cy_string_append_rune(CyString str, Rune r)
+inline CyString cy_string_append_rune(CyString str, Rune r)
 {
     // TODO(cya): utf-8 encode rune
     isize width = 1;
@@ -2163,6 +2170,62 @@ inline void cy_string_16_free(CyString16 str)
     if (str != NULL) {
         cy_free(CY_STRING_HEADER(str)->alloc, CY_STRING_HEADER(str));
     }
+}
+
+CyString16 cy_string_16_append_len(CyString16 str, const wchar_t *other, isize len)
+{
+    if (len > 0) {
+        isize cur_len = cy_string_16_len(str);
+
+        str = cy_string_16_reserve_space_for(str, len);
+        CY_VALIDATE_PTR(str);
+
+        cy_mem_copy(str + cur_len, other, CY__U16S_TO_BYTES(len));
+
+        isize new_len = cur_len + len;
+        str[new_len] = '\0';
+
+        cy__string_16_set_len(str, new_len);
+    }
+
+    return str;
+}
+
+inline CyString16 cy_string_16_append(CyString16 str, const CyString16 other)
+{
+    return cy_string_16_append_len(str, other, cy_string_16_len(other));
+}
+
+inline CyString16 cy_string_16_append_c(CyString16 str, const wchar_t *other)
+{
+    return cy_string_16_append_len(str, other, cy_wcs_len(other));
+}
+
+// TODO(cya): implement
+#if 0
+inline CyString16 cy_string_16_append_rune(CyString16 str, Rune r)
+{
+    
+}
+#endif
+
+CyString16 cy_string_16_append_fmt(CyString16 str, const wchar_t *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+
+    // TODO(cya): maybe have some fancier size handling than this?
+    wchar_t buf[0x1000] = {0};
+    
+    isize len = vsnwprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
+
+    va_end(va);
+    return cy_string_16_append_len(str, buf, len);
+}
+
+inline CyString16 cy_string_16_append_view(CyString16 str, CyString16View view)
+{
+    return cy_string_16_append_len(str, (const wchar_t*)view.text, view.len);
 }
 
 /* ---------------------------- String16 views ------------------------------ */
