@@ -5,6 +5,8 @@
 
 #include "compiler.c"
 
+// TODO(cya): change TextBufs to CyString16 when implemented
+
 typedef struct {
     isize size;
     isize len;
@@ -12,7 +14,6 @@ typedef struct {
 } TextBuf;
 
 typedef struct {
-    TextBuf editor;
     TextBuf lines;
     TextBuf logger;
     TextBuf file_path;
@@ -1025,16 +1026,17 @@ UINT_PTR Win32DialogHook(
 
 static inline CyString cy_string_from_text_editor(void)
 {
-    isize new_len = GetWindowTextLengthW(g_controls.text_editor);
-    text_buf_resize(&g_bufs.editor, new_len);
-    text_buf_clear(&g_bufs.editor);
+    isize len = GetWindowTextLengthW(g_controls.text_editor);
+    u16 *text = page_alloc((len + 1) * sizeof(*text));
     GetWindowTextW(
         g_controls.text_editor,
-        g_bufs.editor.data, new_len + 1
+        text, len + 1
     );
-    g_bufs.editor.len = new_len;
 
-    return Win32UTF16toUTF8(g_bufs.editor.data, g_bufs.editor.len);
+    CyString str = Win32UTF16toUTF8(text, len);
+
+    page_free(text);
+    return str;
 }
 
 #define MOUSEMOVE_TIMEOUT_MS (1000 / 200)
@@ -1228,9 +1230,12 @@ LRESULT CALLBACK Win32WindowCallback(
             isize utf16_len;
             utf16_buf = Win32UTF8toUTF16(utf8_buf, utf8_len, &utf16_len);
 
-            text_buf_convert_newlines(&g_bufs.editor, utf16_buf, utf16_len);
+            TextBuf buf = text_buf_alloc(utf16_len);
+            text_buf_convert_newlines(&buf, utf16_buf, utf16_len);
 
-            SetWindowTextW(g_controls.text_editor, g_bufs.editor.data);
+            SetWindowTextW(g_controls.text_editor, buf.data);
+            text_buf_free(&buf);
+
             Win32SetLogAreaText(NULL);
             Win32SetStatusbarText(&g_bufs.file_path);
             Win32UpdateLineNumbers();
@@ -1332,7 +1337,6 @@ LRESULT CALLBACK Win32WindowCallback(
             SendMessageW(g_controls.text_editor, WM_CUT, 0, 0);
         } break;
         case BUTTON_COMPILE: {
-            // TODO(cya): prepare src text and print output to log area
             CyString src_code = cy_string_from_text_editor();
             CyString output = NULL;
             u16 *output_utf16 = NULL;
@@ -1444,7 +1448,7 @@ int WINAPI wWinMain(
     (void)instance, (void)prev_instance, (void)cmd_line, (void)cmd_show;
 
     g_bufs.lines = text_buf_alloc((MAX_LINE_DIGITS + 2) * 20);
-    g_bufs.editor = text_buf_alloc(0x1000);
+    // g_bufs.editor = text_buf_alloc(0x1000);
     g_bufs.file_path = text_buf_alloc(MAX_PATH);
 
     const u16 *CLASS_NAME = L"compiler_gui_window";

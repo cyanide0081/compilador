@@ -462,6 +462,7 @@ CY_DEF const char *cy_char_last_occurence(const char *str, char c);
 
 /* ============================ C-String procs ============================== */
 CY_DEF isize cy_str_len(const char *str);
+CY_DEF isize cy_wcs_len(const wchar_t *str);
 
 /* ======================= Strings (and StringViews) ======================== */
 typedef char *CyString;
@@ -542,14 +543,47 @@ CY_DEF b32 cy_string_view_are_equal(CyStringView a, CyStringView b);
 CY_DEF b32 cy_string_view_has_prefix(CyStringView str, const char *prefix);
 CY_DEF b32 cy_string_view_contains(CyStringView str, const char *char_set);
 
-/* TODO(cya):
- * more CyString/CyStringView procedures (trim, etc.)
- */
+/* ================== Strings (and StringViews) (UTF-16) ==================== */
+typedef wchar_t *CyString16;
 
+typedef struct {
+    const u16 *text;
+    isize len;
+} CyString16View;
+
+CY_DEF isize cy_string_16_len(CyString16 str);
+CY_DEF isize cy_string_16_cap(CyString16 str);
+CY_DEF isize cy_string_16_alloc_size(CyString16 str);
+CY_DEF isize cy_string_16_available_space(CyString16 str);
+
+CY_DEF void cy__string_16_set_len(CyString16 str, isize len);
+CY_DEF void cy__string_16_set_cap(CyString16 str, isize cap);
+
+CY_DEF CyString16 cy_string_16_create_reserve(CyAllocator a, isize cap);
+CY_DEF CyString16 cy_string_16_create_len(
+    CyAllocator a, const wchar_t *str, isize len
+);
+CY_DEF CyString16 cy_string_16_create(CyAllocator a, const wchar_t *str);
+CY_DEF CyString16 cy_string_16_create_view(CyAllocator a, CyString16View str);
+CY_DEF CyString16 cy_string_16_reserve_space_for(
+    CyString16 str, isize extra_len
+);
+CY_DEF CyString16 cy_string_16_shrink(CyString16 str);
+CY_DEF void cy_string_16_free(CyString16 str);
+
+CY_DEF CyString16View cy_string_16_view_create_len(const wchar_t *str, isize len);
+CY_DEF CyString16View cy_string_16_view_create(CyString16 str);
+CY_DEF CyString16View cy_string_16_view_create_c(const wchar_t *str);
+// NOTE(cya): exclusive range
+CY_DEF CyString16View cy_string_16_view_substring(
+    CyString16View str, isize begin_idx, isize end_idx
+);
+CY_DEF b32 cy_string_16_view_are_equal(CyString16View a, CyString16View b);
+CY_DEF b32 cy_string_16_view_has_prefix(CyString16View str, const wchar_t *prefix);
+CY_DEF b32 cy_string_16_view_contains(CyString16View str, const wchar_t *char_set);
 
 /* ============================ Unicode helpers ============================= */
 CY_DEF isize cy_utf8_codepoints(const char *str);
-
 
 /******************************************************************************
  ******************************* IMPLEMENTATION *******************************
@@ -1532,6 +1566,17 @@ inline isize cy_str_len(const char *str)
     return str - begin;
 }
 
+inline isize cy_wcs_len(const wchar_t *str)
+{
+    // TODO(cya): optimize(?)
+    isize len = 0;
+    while (*str++ != '\0') {
+        len += 1;
+    }
+
+    return len;
+}
+
 /* ================================ Strings ================================= */
 inline isize cy_string_len(CyString str)
 {
@@ -1622,7 +1667,7 @@ CyString cy_string_create_len(CyAllocator a, const char *str, isize len)
     return string;
 }
 
-CyString cy_string_create(CyAllocator a, const char *str)
+inline CyString cy_string_create(CyAllocator a, const char *str)
 {
     return cy_string_create_len(a, str, cy_str_len(str));
 }
@@ -1630,13 +1675,6 @@ CyString cy_string_create(CyAllocator a, const char *str)
 inline CyString cy_string_create_view(CyAllocator a, CyStringView str)
 {
     return cy_string_create_len(a, (const char*)str.text, str.len);
-}
-
-void cy_string_free(CyString str)
-{
-    if (str != NULL) {
-        cy_free(CY_STRING_HEADER(str)->alloc, CY_STRING_HEADER(str));
-    }
 }
 
 CyString cy_string_reserve_space_for(CyString str, isize extra_len)
@@ -1681,6 +1719,13 @@ CyString cy_string_shrink(CyString str)
     }
 
     return str;
+}
+
+inline void cy_string_free(CyString str)
+{
+    if (str != NULL) {
+        cy_free(CY_STRING_HEADER(str)->alloc, CY_STRING_HEADER(str));
+    }
 }
 
 CyString cy_string_append_len(CyString str, const char *other, isize len)
@@ -1962,6 +2007,229 @@ b32 cy_string_view_contains(CyStringView str, const char *char_set)
 
     return false;
 }
+
+/* =========================== Strings (UTF-16) ============================= */
+#define CY__U16S_TO_BYTES(c) ((c) * sizeof(u16))
+
+inline isize cy_string_16_len(CyString16 str)
+{
+    return (str == NULL) ? 0 : CY_STRING_HEADER(str)->len;
+}
+
+inline isize cy_string_16_cap(CyString16 str)
+{
+    return (str == NULL) ? 0 : CY_STRING_HEADER(str)->cap;
+}
+
+inline isize cy_string_16_alloc_size(CyString16 str)
+{
+    isize bytes = CY__U16S_TO_BYTES(cy_string_16_cap(str) + 1);
+    return sizeof(CyStringHeader) + bytes;
+}
+
+inline isize cy_string_16_available_space(CyString16 str)
+{
+    CyStringHeader *h = CY_STRING_HEADER(str);
+    if (h->cap > h->len) {
+        return h->cap - h->len;
+    }
+
+    return 0;
+}
+
+inline void cy__string_16_set_len(CyString16 str, isize len)
+{
+    if (str == NULL) {
+        return;
+    }
+
+    CY_STRING_HEADER(str)->len = len;
+}
+
+inline void cy__string_16_set_cap(CyString16 str, isize cap)
+{
+    if (str == NULL) {
+        return;
+    }
+
+    CY_STRING_HEADER(str)->cap = cap;
+}
+
+CyString16 cy_string_16_create_reserve(CyAllocator a, isize cap)
+{
+    isize header_size = sizeof(CyStringHeader);
+    isize total_size = CY__U16S_TO_BYTES(header_size + cap + 1);
+    void *ptr = cy_alloc(a, total_size);
+    CY_VALIDATE_PTR(ptr);
+
+    cy_mem_zero(ptr, total_size);
+
+    CyStringHeader *header = ptr;
+    *header = (CyStringHeader){
+        .alloc = a,
+        .len = 0,
+        .cap = cap,
+    };
+
+    return (CyString16)(header + 1);
+}
+
+CyString16 cy_string_16_create_len(
+    CyAllocator a, const wchar_t *str, isize len
+) {
+    isize header_size = sizeof(CyStringHeader);
+    isize total_size = CY__U16S_TO_BYTES(header_size + len + 1);
+    void *ptr = cy_alloc(a, total_size);
+    CY_VALIDATE_PTR(ptr);
+
+    if (str == NULL) {
+        cy_mem_zero(ptr, total_size);
+    }
+
+    CyStringHeader *header = ptr;
+    *header = (CyStringHeader){
+        .alloc = a,
+        .len = len,
+        .cap = len,
+    };
+
+    CyString16 string = (CyString16)((u8*)ptr + header_size);
+    if (len > 0 && str != NULL) {
+        cy_mem_copy(string, str, CY__U16S_TO_BYTES(len));
+    }
+
+    string[len] = '\0';
+    return string;
+}
+
+inline CyString16 cy_string_16_create(CyAllocator a, const wchar_t *str)
+{
+    return cy_string_16_create_len(a, str, cy_wcs_len(str));
+}
+
+inline CyString16 cy_string_16_create_view(CyAllocator a, CyString16View str)
+{
+    return cy_string_16_create_len(a, (const wchar_t*)str.text, str.len);
+}
+
+CyString16 cy_string_16_reserve_space_for(CyString16 str, isize extra_len)
+{
+    isize available = cy_string_16_available_space(str);
+    if (available >= extra_len) {
+        return str;
+    }
+
+    void *mem = CY_STRING_HEADER(str);
+    CyStringHeader *header = mem;
+    CyAllocator a = header->alloc;
+
+    isize header_size = sizeof(*header);
+    isize old_cap = cy_string_16_cap(str);
+    isize new_cap = cy_string_16_len(str) + extra_len;
+    isize old_size = header_size + CY__U16S_TO_BYTES(old_cap + 1);
+    isize new_size = header_size + CY__U16S_TO_BYTES(new_cap + 1);
+
+    void *new_mem = cy_resize(a, mem, old_size, new_size);
+    CY_VALIDATE_PTR(new_mem);
+
+    header = new_mem;
+    header->alloc = a;
+
+    str = (CyString16)(header + 1);
+    cy__string_16_set_cap(str, new_cap);
+    return str;
+}
+
+CyString16 cy_string_16_shrink(CyString16 str)
+{
+    CY_VALIDATE_PTR(str);
+
+    isize len = cy_string_16_len(str), cap = cy_string_16_cap(str);
+    isize header_size = sizeof(CyStringHeader);
+    isize old_size = header_size + CY__U16S_TO_BYTES(cap + 1);
+    isize new_size = header_size + CY__U16S_TO_BYTES(len + 1);
+    void *ptr = str - header_size;
+    if (new_size < old_size) {
+        ptr = cy_resize(CY_STRING_HEADER(str)->alloc, ptr, old_size, new_size);
+        str = (CyString16)((u8*)ptr + header_size);
+        cy__string_16_set_cap(str, len);
+    }
+
+    return str;
+}
+
+inline void cy_string_16_free(CyString16 str)
+{
+    if (str != NULL) {
+        cy_free(CY_STRING_HEADER(str)->alloc, CY_STRING_HEADER(str));
+    }
+}
+
+/* ---------------------------- String16 views ------------------------------ */
+inline CyString16View cy_string_16_view_create_len(
+    const wchar_t *str, isize len
+) {
+    if (len < 0) {
+        len = cy_wcs_len(str);
+    }
+
+    return (CyString16View){
+        .text = (const u16*)str,
+        .len = len,
+    };
+}
+
+inline CyString16View cy_string_16_view_create(CyString16 str)
+{
+    return cy_string_16_view_create_len(str, cy_string_16_len(str));
+}
+
+inline CyString16View cy_string_16_view_create_c(const wchar_t *str)
+{
+    return cy_string_16_view_create_len(str, cy_wcs_len(str));
+}
+
+CyString16View cy_string_16_view_substring(
+    CyString16View str, isize begin_idx, isize end_idx
+) {
+    isize max = str.len, lo = begin_idx, hi = end_idx;
+    CY_ASSERT_MSG(lo <= hi && hi <= max, "%td..%td..%td", lo, hi, max);
+
+    return cy_string_16_view_create_len((const wchar_t*)str.text + lo, hi - lo);
+}
+
+inline b32 cy_string_16_view_are_equal(CyString16View a, CyString16View b)
+{
+    return (a.len == b.len) && (
+        cy_mem_compare(a.text, b.text, CY__U16S_TO_BYTES(a.len)) == 0
+    );
+}
+
+inline b32 cy_string_16_view_has_prefix(
+    CyString16View str, const wchar_t *prefix
+) {
+    CyString16View other = cy_string_16_view_create_c(prefix);
+    return cy_string_16_view_are_equal(
+        cy_string_16_view_create_len((const wchar_t*)str.text, other.len), other
+    );
+}
+
+b32 cy_string_16_view_contains(CyString16View str, const wchar_t *char_set)
+{
+    isize len = cy_wcs_len(char_set);
+    for (isize i = 0; i < str.len; i++) {
+        for (isize j = 0; j < len; j++) {
+            if (str.text[i] == char_set[j]) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/* ============================ Unicode helpers ============================= */
+CY_DEF isize cy_utf8_codepoints(const char *str);
 
 /* ============================ Unicode helpers ============================= */
 #if 0
