@@ -5,18 +5,11 @@
 
 #include "compiler.c"
 
-// TODO(cya): change TextBufs to CyString16 when implemented
+typedef CyString16View String16;
 
 typedef struct {
-    isize size;
-    isize len;
-    u16 *data; // Stored as UTF-16 for smoother interop with WIN32
-} TextBuf;
-
-typedef struct {
-    TextBuf lines;
-    TextBuf logger;
-    TextBuf file_path;
+    CyString16 lines;
+    CyString16 members;
 } GlobalBufs;
 static GlobalBufs g_bufs;
 
@@ -33,9 +26,9 @@ typedef struct {
     isize splitter_top;
     isize elapsed_ms;
     HCURSOR resize_cursor;
+    HANDLE file;
     b8 scratch_file;
     b8 resizing_splitter;
-    const u16 *members;
 } GlobalState;
 static GlobalState g_state = {
     .scratch_file = true
@@ -46,53 +39,6 @@ static GlobalState g_state = {
 #define ASSERT(cond) CY_ASSERT(cond)
 #define STATIC_ASSERT(cond) CY_STATIC_ASSERT(cond)
 #define UTF16_STATIC_LENGTH(str) CY_STATIC_STR_LEN(str)
-
-#if 0
-static inline isize round_up(isize size, isize target)
-{
-    ASSERT((target & (target - 1)) == 0); // is power of 2
-
-    uintptr mod = size & (target - 1);
-    return mod ? size + target - mod : (size == 0) ? target : size;
-}
-#endif
-
-static inline isize utf16_length(const u16* buf)
-{
-    if (buf == NULL) {
-        return 0;
-    }
-
-    isize len = 0;
-    while (*buf++ != '\0') len += 1;
-
-    return len;
-}
-
-static inline u16 *utf16_concat(
-    u16 *dst,
-    const u16 *src,
-    isize len
-) {
-    isize size = len * sizeof(*dst);
-    CopyMemory(dst, src, size);
-    return dst + len;
-}
-
-#if 0
-static inline void *page_alloc(isize bytes)
-{
-    return VirtualAlloc(
-        NULL, bytes,
-        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
-    );
-}
-
-static inline void page_free(void *memory)
-{
-    if (memory != NULL) VirtualFree(memory, 0, MEM_RELEASE);
-}
-#endif
 
 static u16 *Win32BuildErrorMessage(const u16 *preface)
 {
@@ -146,50 +92,53 @@ static inline void Win32FatalErrorDialog(const u16 *msg)
 static CyString16 Win32UTF8toUTF16(CyString str)
 {
     CY_VALIDATE_PTR(str);
-    
+
     CyAllocator a = CY_STRING_HEADER(str)->alloc;
-    isize len_utf16 = MultiByteToWideChar(
+    isize len = cy_string_len(str);
+    isize size_utf16 = MultiByteToWideChar(
         CP_UTF8, 0,
-        str, cy_string_len(str),
+        str, len + 1,
         NULL, 0
     );
-    CyString16 str_utf16 = cy_string_16_create_reserve(a, len_utf16);
+    isize len_utf16 = size_utf16 - 1;
+    CyString16 str_utf16 = cy_string_16_create_reserve(a, size_utf16);
     CY_VALIDATE_PTR(str_utf16);
 
     isize res = MultiByteToWideChar(
         CP_UTF8, 0,
-        str, cy_string_len(str),
-        str_utf16, len_utf16
+        str, len + 1,
+        str_utf16, size_utf16 + 1
     );
     if (res == 0) {
         Win32ErrorDialog(L"Erro ao converter texto para UTF-16");
+        cy_string_16_free(str_utf16);
         return NULL;
     }
 
     cy__string_16_set_len(str_utf16, len_utf16);
-    str_utf16[len_utf16] = '\0';
     return str_utf16;
 }
 
 static CyString Win32UTF16toUTF8(CyString16 str)
 {
     CY_VALIDATE_PTR(str);
-    
+
     CyAllocator a = CY_STRING_HEADER(str)->alloc;
     isize len = cy_string_16_len(str);
-    isize len_utf8 = WideCharToMultiByte(
+    isize size_utf8 = WideCharToMultiByte(
         CP_UTF8, 0,
-        str, len,
+        str, len + 1,
         NULL, 0,
         NULL, NULL
     );
+    isize len_utf8 = size_utf8 - 1;
     CyString str_utf8 = cy_string_create_reserve(a, len_utf8);
     CY_VALIDATE_PTR(str_utf8);
 
     isize res = WideCharToMultiByte(
         CP_UTF8, 0,
         str, len + 1,
-        str_utf8, len_utf8 + 1,
+        str_utf8, size_utf8,
         NULL, NULL
     );
     if (res == 0) {
@@ -199,98 +148,41 @@ static CyString Win32UTF16toUTF8(CyString16 str)
     }
 
     cy__string_set_len(str_utf8, len_utf8);
-    str_utf8[len_utf8] = '\0';
     return str_utf8;
 }
 
-#if 0
-static TextBuf text_buf_alloc(isize chars)
-{
-    isize size = round_up((chars + 1) * sizeof(u16), PAGE_SIZE);
-    u16 *buf = page_alloc(size);
-    if (buf == NULL) {
-        WIN32_FATAL_MEM_ERROR_DIALOG();
+static void Win32AppendExtension(
+    u16 *path_buf, isize ext_idx, isize cap, const u16 *ext
+) {
+    const isize ext_len = UTF16_STATIC_LENGTH(ext);
+    const isize new_len = cy_wcs_len(path_buf) + ext_len;
+
+    ASSERT(cap > new_len);
+
+    u16 *end = path_buf + ext_idx;
+    if (ext_idx > 0 && *(end - 1) != '.') {
+        *(end++) = '.';
     }
 
-    return (TextBuf){
-        .size = size,
-        .data = buf,
-    };
+    CopyMemory(end, ext, CY__U16S_TO_BYTES(ext_len));
 }
-
-static void text_buf_resize(TextBuf *buf, isize new_chars)
-{
-    isize new_size = round_up((new_chars + 1) * sizeof(*buf->data), PAGE_SIZE);
-    b32 below_threshold = (new_size * 2 < buf->size);
-    if (new_size <= buf->size && !below_threshold) {
-        return;
-    }
-
-    u16 *new_buf = page_alloc(new_size);
-    if (new_buf == NULL) {
-        WIN32_FATAL_MEM_ERROR_DIALOG();
-    }
-
-    OutputDebugStringW(L"Resized Text Buffer\n");
-
-    isize old_bytes = buf->len * sizeof(*buf->data);
-    isize copy_size = old_bytes <= new_size ? old_bytes : new_size;
-
-    CopyMemory(new_buf, buf->data, copy_size);
-    page_free(buf->data);
-
-    buf->data = new_buf;
-    buf->size = new_size;
-}
-
-static inline void text_buf_free(TextBuf *buf)
-{
-    page_free(buf->data);
-    FillMemory(buf, sizeof(*buf), 0);
-}
-
-#if 0
-static inline isize text_buf_cap(TextBuf *buf)
-{
-    return buf->size / sizeof(*buf->data);
-}
-#endif
-
-static inline void text_buf_copy_from(TextBuf *buf, u16 *src)
-{
-    isize len = utf16_length(src);
-    text_buf_resize(buf, len);
-    CopyMemory(buf->data, src, len * sizeof(*src));
-    buf->data[len] = L'\0';
-    buf->len = len;
-}
-
-static inline void text_buf_recalc_len(TextBuf *buf)
-{
-    buf->len = utf16_length(buf->data);
-}
-
-static inline void text_buf_clear(TextBuf *buf)
-{
-    FillMemory(buf->data, buf->size, 0);
-    buf->len = 0;
-}
-#endif
 
 static void utf16_insert_dots(u16 *str, b32 null_terminate)
 {
-#if defined(_M_X64) || defined(__x86_64__)
-    u16 save = str[3];
-    *((UINT64*)str) = *((UINT64*)L"..."); // 64-bit write of "..."
+    enum {
+        MIN_CAP = 3,
+    };
 
-    if (!null_terminate) {
-        str[3] = save;
-    }
+    CY_ASSERT_NOT_NULL(str);
+
+#if defined(CY_ARCH_64_BIT) // 64-bit write of "..."
+    u16 buf[] = L"...";
+    buf[3] = str[3] * !null_terminate;
+    *((UINT64*)str) = *((UINT64*)buf);
 #else
     str[0] = '.';
     str[1] = '.';
     str[2] = '.';
-
     if (null_terminate) {
         str[3] = '\0';
     }
@@ -299,19 +191,14 @@ static void utf16_insert_dots(u16 *str, b32 null_terminate)
 
 // NOTE(cya): dumb UTF-16 parser for now (just considers characters coming
 // from the surrogate range to be 2 cells wide and all others to be 1 cell wide)
-static void text_buf_trim_start(TextBuf *buf, isize max_cells) {
-    if (buf->data == NULL) {
-        return;
-    }
-
-    UINT16 *str = buf->data;
-    isize len = buf->len;
+// FIXME(cya): doesn't really parse the surrogates correctly yet
+static void utf16_trim_start(u16 *str, isize len, isize max_cells) {
     enum {
         MIN_CELLS = 3,
     };
-    if (len < MIN_CELLS) {
-        text_buf_resize(buf, MIN_CELLS);
-    }
+
+    CY_ASSERT_NOT_NULL(str);
+
     if (max_cells < MIN_CELLS) {
         utf16_insert_dots(str, true);
         return;
@@ -319,8 +206,8 @@ static void text_buf_trim_start(TextBuf *buf, isize max_cells) {
 
     // TODO(cya): port wcswidth code to here so we can get a way more accurate
     // estimated cell width when calculating the length of the string
-    int offset = 0, cells = 0;
-    for (offset = len - 1; (offset >= 0) && (cells < (int)max_cells); cells++) {
+    isize offset = 0, cells = 0;
+    for (offset = len - 1; (offset >= 0) && (cells < max_cells); cells++) {
         b32 is_surrogate = str[offset] >= 0xD800 && str[offset] <= 0xDFFF;
         if (!is_surrogate || offset < 2) {
             offset -= 1;
@@ -340,13 +227,13 @@ static void text_buf_trim_start(TextBuf *buf, isize max_cells) {
 
     isize new_len = len - offset;
     if (offset > 0) {
-        utf16_insert_dots(str + offset, false);
-
-        isize bytes_to_move = new_len * sizeof(*str);
+        isize bytes_to_move = CY__U16S_TO_BYTES(new_len);
         MoveMemory(str, str + offset, bytes_to_move);
 
-        isize bytes_to_clear = (len - new_len) * sizeof(*str);
+        isize bytes_to_clear = CY__U16S_TO_BYTES(len - new_len);
         FillMemory(str + new_len, bytes_to_clear, 0);
+
+        utf16_insert_dots(str, false);
     }
 }
 
@@ -386,6 +273,7 @@ typedef enum {
     BUTTON_DISPLAY_GROUP,
     BUTTON_COUNT,
 } ToolbarButtons;
+
 STATIC_ASSERT(BUTTON_COUNT == 8);
 
 #define MAX_LINE_DIGITS 3
@@ -597,30 +485,6 @@ static void Win32SetupControls(HWND parent)
     WIN32_STRIP_WINDOW_THEME(g_controls.statusbar);
 }
 
-static isize int_to_utf16(isize n, isize max_digits, u16 *buf, isize cap)
-{
-    isize dividend = 10;
-    isize digits = 1;
-    while (n % dividend != n) {
-        dividend *= 10;
-        digits += 1;
-    }
-
-    while (digits > max_digits) {
-        dividend /= 10;
-        n %= dividend;
-        digits -= 1;
-    }
-
-    for (isize i = 0; i < digits && i < (int)cap; i++) {
-        dividend /= 10;
-        buf[i] = L'0' + n / dividend;
-        n %= dividend;
-    }
-
-    return digits;
-}
-
 typedef enum {
     LE_CR,
     LE_LF,
@@ -649,19 +513,17 @@ static inline LineEnding line_ending_identify(const u16 *str)
     }
 }
 
-typedef CyString16View String16;
-
 typedef struct {
     String16 string;
     isize cur_line_offset;
     isize crlf_len;
 } LineScanner;
 
-static LineScanner line_scanner_build(String16 *string)
+static LineScanner line_scanner_build(String16 str)
 {
     isize offset = 0, crlf_len = 0;
-    u16 *end = string->str;
-    while (offset < string->len) {
+    const u16 *end = str.text;
+    while (offset < str.len) {
         switch (line_ending_identify(end)) {
         case LE_CRLF: {
             offset += 2;
@@ -673,26 +535,26 @@ static LineScanner line_scanner_build(String16 *string)
         } break;
         }
 
-        end = string->str + offset;
+        end = str.text + offset;
     }
 
     return (LineScanner){
-        .string = *string,
+        .string = str,
         .crlf_len = crlf_len,
     };
 }
 
 static String16 line_scanner_get_line(LineScanner *scanner)
 {
-    u16 *buf = scanner->string.str;
+    const u16 *buf = scanner->string.text;
     isize offset = scanner->cur_line_offset;
     isize len = scanner->string.len;
     if (offset >= len) {
         return (String16){0};
     }
 
-    u16 *line = buf + offset;
-    u16 *curr = line;
+    const u16 *line = buf + offset;
+    const u16 *curr = line;
     isize line_len = 0;
     while (offset < len) {
         LineEnding end = line_ending_identify(curr);
@@ -707,32 +569,23 @@ static String16 line_scanner_get_line(LineScanner *scanner)
 
     scanner->cur_line_offset = offset;
     return (String16){
-        .str = line,
+        .text = line,
         .len = line_len,
     };
 }
 
-#define TE_NEWLINE L"\r\n"
-
-static void utf16_convert_newlines(LineScanner *scanner, u16 *dst)
+static CyString16 cy_string_16_convert_newlines(CyAllocator a, String16 src)
 {
-    String16 line = line_scanner_get_line(scanner);
-    u16 *end = utf16_concat(dst, line.str, line.len);
-    while (line.str != NULL) {
-        end = utf16_concat(end, TE_NEWLINE, UTF16_STATIC_LENGTH(TE_NEWLINE));
-        line = line_scanner_get_line(scanner);
-        end = utf16_concat(end, line.str, line.len);
+    LineScanner scanner = line_scanner_build(src);
+    CyString16 res = cy_string_16_create_reserve(a, scanner.crlf_len);
+    String16 line = line_scanner_get_line(&scanner);
+    res = cy_string_16_append_view(res, line);
+    while (line.text != NULL) {
+        line = line_scanner_get_line(&scanner);
+        res = cy_string_16_append_fmt(res, L"\r\n%.*ls", line.len, line.text);
     }
-}
 
-static void text_buf_convert_newlines(TextBuf *dst, u16 *src, isize len)
-{
-    String16 view = cy_string_16_view_create_len(src, len);
-    LineScanner scanner = line_scanner_build(&view);
-
-    text_buf_clear(dst);
-    text_buf_resize(dst, scanner.crlf_len);
-    utf16_convert_newlines(&scanner, dst->data);
+    return res;
 }
 
 static void Win32UpdateLineNumbers(void)
@@ -765,21 +618,14 @@ static void Win32UpdateLineNumbers(void)
     isize line_len = MAX_LINE_DIGITS + 2;
     isize len = line_len * (last_visible_line - first_visible_line + 1);
 
-    text_buf_clear(&g_bufs.lines);
-    text_buf_resize(&g_bufs.lines, len);
+    cy_string_16_clear(g_bufs.lines);
+    cy_string_16_resize(g_bufs.lines, len);
 
-    u16 *buf = g_bufs.lines.data;
-
-    isize pos = 0;
+    CyString16 buf = g_bufs.lines;
     for (isize i = first_visible_line; i <= last_visible_line; i++) {
-        int digits = int_to_utf16(i, MAX_LINE_DIGITS, buf + pos, len - pos);
-        pos += digits;
-
-        buf[pos++] = L'\r';
-        buf[pos++] = L'\n';
+        buf = cy_string_16_append_fmt(buf, L"%td\r\n", i);
     }
 
-    text_buf_recalc_len(&g_bufs.lines);
     SetWindowTextW(g_controls.line_numbers, buf);
 }
 
@@ -915,19 +761,6 @@ LRESULT CALLBACK Win32TextEditorCallback(
         Win32UpdateLineNumbers();
     } break;
     // TODO(cya): figure out a way to disable the BitBlts() for good
-    // case WM_NCCALCSIZE: {
-    //     b32 calc_valid_rects = w_param && g_state.resizing_splitter;
-    //     if (calc_valid_rects) {
-    //         NCCALCSIZE_PARAMS *nccs_params = (NCCALCSIZE_PARAMS*)l_param;
-    //         DefSubclassProc(
-    //             control, message,
-    //             FALSE, (LPARAM)&nccs_params->rgrc[0]
-    //         );
-    //         nccs_params->rgrc[1] = nccs_params->rgrc[2];
-
-    //         return WVR_VALIDRECTS;
-    //     }
-    // } break;
     case WM_PASTE: {
         if (!OpenClipboard(NULL)) {
             break;
@@ -945,25 +778,18 @@ LRESULT CALLBACK Win32TextEditorCallback(
         }
 
         // NOTE(cya): clipboard content must be copied acording to MSDN
-        isize clip_text_len = utf16_length(clip_text);
-        isize clip_text_size = (clip_text_len + 1) * sizeof(*clip_text);
-
-        u16 *copied_text = page_alloc(clip_text_size);
-        utf16_concat(copied_text, clip_text, clip_text_len);
-
-        LineScanner scanner = line_scanner_build(&(String16){
-            .str = copied_text,
-            .len = clip_text_len
-        });
-        isize new_size = (scanner.crlf_len + 1) * sizeof(*scanner.string.str);
+        CyString16 converted = cy_string_16_convert_newlines(
+            g_allocs.page, cy_string_16_view_create_c(clip_text)
+        );
+        isize new_size = CY__U16S_TO_BYTES(cy_string_16_cap(converted) + 1);
         u16 *new_text = GlobalLock(GlobalAlloc(GHND, new_size));
         if (new_text == NULL) {
-            page_free(copied_text);
+            cy_string_16_free(converted);
             goto clip_cleanup;
         }
 
-        utf16_convert_newlines(&scanner, new_text);
-        page_free(copied_text);
+        CopyMemory(new_text, converted, new_size);
+        cy_string_16_free(converted);
 
         // NOTE(cya): no freeing here since the OS takes ownership
         GlobalUnlock(new_text);
@@ -1002,14 +828,19 @@ static inline void Win32SetLogAreaText(const u16 *txt)
 
 #define MAX_STATUSBAR_TEXT_LEN 80
 
-static inline void Win32SetStatusbarText(TextBuf *buf)
+static inline void Win32SetStatusbarText(u16 *str)
 {
-    TextBuf display_buf = {0};
+    CY_ASSERT_NOT_NULL(str);
+
     isize prefix_len = UTF16_STATIC_LENGTH(L"\\\\?\\");
-    text_buf_copy_from(&display_buf, buf->data + prefix_len);
-    text_buf_trim_start(&display_buf, MAX_STATUSBAR_TEXT_LEN);
-    SetWindowTextW(g_controls.statusbar, display_buf.data);
-    text_buf_free(&display_buf);
+    isize len = cy_wcs_len(str);
+    ASSERT(len > prefix_len);
+
+    str += prefix_len;
+    len -= prefix_len;
+    utf16_trim_start(str, len, MAX_STATUSBAR_TEXT_LEN);
+
+    SetWindowTextW(g_controls.statusbar, str);
 }
 
 UINT_PTR Win32DialogHook(
@@ -1039,6 +870,14 @@ static inline CyString cy_string_from_text_editor(CyAllocator a)
     CyString utf8 = Win32UTF16toUTF8(utf16);
     cy_string_16_free(utf16);
     return utf8;
+}
+
+#define PATH_BUF_CAP 0x1000
+
+static inline void file_path_from_handle(
+    HANDLE file, u16 *buf_out, isize buf_size
+) {
+    GetFinalPathNameByHandleW(file, buf_out, buf_size, 0);
 }
 
 #define MOUSEMOVE_TIMEOUT_MS (1000 / 200)
@@ -1151,25 +990,24 @@ LRESULT CALLBACK Win32WindowCallback(
         switch (command) {
         case BUTTON_FILE_NEW: {
             g_state.scratch_file = true;
-            text_buf_clear(&g_bufs.file_path);
 
+            Win32UpdateLineNumbers();
             SetWindowTextW(g_controls.text_editor, NULL);
             SetWindowTextW(g_controls.log_area, NULL);
-            Win32UpdateLineNumbers();
             SetWindowTextW(g_controls.statusbar, SCRATCH_FILE_TEXT);
         } break;
         case BUTTON_FILE_OPEN: {
             u16 *file_filter =
                 L"Todos os arquivos (*.*)\0*.*\0"
                 "Arquivos de texto (*.txt)\0*.txt\0\0";
-            u16 temp_buf[PAGE_SIZE] = {0};
+            u16 path_buf[PATH_BUF_CAP] = {0};
             OPENFILENAMEW ofn = {
                 .lStructSize = sizeof(OPENFILENAMEW),
                 .hwndOwner = window,
                 .Flags = OFN_FLAGS,
                 .lpfnHook = Win32DialogHook,
-                .lpstrFile = temp_buf,
-                .nMaxFile = CY_STATIC_ARR_LEN(temp_buf),
+                .lpstrFile = path_buf,
+                .nMaxFile = CY_STATIC_ARR_LEN(path_buf),
                 .lpstrFilter = file_filter,
                 .nFilterIndex = 2,
             };
@@ -1181,41 +1019,45 @@ LRESULT CALLBACK Win32WindowCallback(
                 return 0;
             }
 
-            HANDLE file = CreateFileW(
+            if (!g_state.scratch_file) {
+                CloseHandle(g_state.file);
+            }
+
+            g_state.file = CreateFileW(
                 ofn.lpstrFile,
-                GENERIC_READ,
-                FILE_SHARE_READ,
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
                 NULL,
                 OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL,
                 NULL
             );
-            if (file == INVALID_HANDLE_VALUE) {
+            if (g_state.file == INVALID_HANDLE_VALUE) {
                 Win32ErrorDialog(L"Erro ao abrir arquivo");
                 return 0;
             }
 
-            u16 final_path[PAGE_SIZE] = {0};
-            GetFinalPathNameByHandleW(
-                file, final_path, CY_STATIC_ARR_LEN(final_path), 0
-            );
+            u16 path_final[PATH_BUF_CAP] = {0};
+            isize path_final_cap = CY_STATIC_ARR_LEN(path_final);
+            file_path_from_handle(g_state.file, path_final, path_final_cap);
 
-            text_buf_copy_from(&g_bufs.file_path, final_path);
             g_state.scratch_file = false;
 
             LARGE_INTEGER file_size;
-            GetFileSizeEx(file, &file_size);
+            GetFileSizeEx(g_state.file, &file_size);
 
-            CyString16 utf16_buf = NULL;
+            CyString16 utf16_buf = NULL, final_buf = NULL;
             isize utf8_len = file_size.QuadPart;
-            CyString utf8_buf = cy_string_create_reserve(g_allocs.page, utf8_len);
+            CyString utf8_buf = cy_string_create_reserve(
+                g_allocs.page, utf8_len
+            );
             if (utf8_buf == NULL) {
                 Win32ErrorDialog(L"Erro ao alocar memória temporária");
             }
 
             isize bytes_read = 0;
             b32 read = ReadFile(
-                file,
+                g_state.file,
                 utf8_buf,
                 file_size.QuadPart,
                 (LPDWORD)&bytes_read,
@@ -1223,7 +1065,6 @@ LRESULT CALLBACK Win32WindowCallback(
             );
             ASSERT(bytes_read == (isize)file_size.QuadPart);
 
-            CloseHandle(file);
             if (!read) {
                 Win32ErrorDialog(L"Erro ao ler arquivo");
                 goto fopen_cleanup;
@@ -1232,25 +1073,25 @@ LRESULT CALLBACK Win32WindowCallback(
             cy__string_set_len(utf8_buf, utf8_len);
             utf16_buf = Win32UTF8toUTF16(utf8_buf);
 
-            CyString16 final_buf = text_convert_newlines(utf16_buf);
-
-            SetWindowTextW(g_controls.text_editor, buf.data);
-            text_buf_free(&buf);
+            final_buf = cy_string_16_convert_newlines(
+                g_allocs.page, cy_string_16_view_create(utf16_buf)
+            );
+            SetWindowTextW(g_controls.text_editor, final_buf);
 
             Win32SetLogAreaText(NULL);
-            Win32SetStatusbarText(&g_bufs.file_path);
+            Win32SetStatusbarText(path_final);
             Win32UpdateLineNumbers();
 
         fopen_cleanup:
-            page_free(utf16_buf);
-            page_free(utf8_buf);
+            cy_string_16_free(final_buf);
+            cy_string_16_free(utf16_buf);
+            cy_string_free(utf8_buf);
         } break;
         case BUTTON_FILE_SAVE: {
-            u16 temp_buf[PAGE_SIZE] = {0};
+            u16 path_buf[PAGE_SIZE] = {0};
+            isize path_buf_cap = CY_STATIC_ARR_LEN(path_buf);
             if (!g_state.scratch_file) {
-                u16 *path = g_bufs.file_path.data;
-                isize size = g_bufs.file_path.len * sizeof(*path);
-                cy_mem_copy(temp_buf, path, size);
+                file_path_from_handle(g_state.file, path_buf, path_buf_cap);
             } else {
                 u16 *file_filter =
                     L"Qualquer (*.*)\0*.*\0Arquivo de texto (*.txt)\0*.txt\0\0";
@@ -1259,8 +1100,8 @@ LRESULT CALLBACK Win32WindowCallback(
                     .hwndOwner = window,
                     .Flags = OFN_FLAGS,
                     .lpfnHook = Win32DialogHook,
-                    .lpstrFile = temp_buf,
-                    .nMaxFile = CY_STATIC_ARR_LEN(temp_buf),
+                    .lpstrFile = path_buf,
+                    .nMaxFile = path_buf_cap,
                     .lpstrFilter = file_filter,
                     .nFilterIndex = 2,
                 };
@@ -1272,61 +1113,69 @@ LRESULT CALLBACK Win32WindowCallback(
                     return 0;
                 }
 
-                u16 *ext = ofn.lpstrFile + ofn.nFileExtension;
-                if (ofn.nFilterIndex == 2 && *ext == 0) {
-                    const u16 EXT[] = L"txt";
-                    const isize ext_len = UTF16_STATIC_LENGTH(EXT);
-                    const isize new_len =  + ext_len;
+                isize idx = ofn.nFileExtension;
+                if (ofn.nFilterIndex == 2 && *(path_buf + idx) == '\0') {
+                    Win32AppendExtension(path_buf, idx, path_buf_cap, L"txt");
+                }
 
-                    ASSERT(CY_STATIC_ARR_LEN(temp_buf) > new_len);
-
-                    if (ofn.nFileExtension > 0 && *(ext - 1) != '.') {
-                        *(ext++) = '.';
+                DWORD attr = GetFileAttributesW(path_buf);
+                b32 exists = (attr != INVALID_FILE_ATTRIBUTES) &&
+                    !(attr & FILE_ATTRIBUTE_DIRECTORY);
+                if (exists) {
+                    int res = MessageBoxW(
+                        window,
+                        L"Este arquivo já existe, deseja substituí-lo?",
+                        L"Confirmar",
+                        MB_YESNO | MB_ICONWARNING
+                    );
+                    if (res == IDNO) {
+                        break;
                     }
+                }
 
-                    utf16_concat(ext, EXT, ext_len);
+                g_state.file = CreateFileW(
+                    path_buf,
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL,
+                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                    NULL
+                );
+                if (g_state.file == INVALID_HANDLE_VALUE) {
+                    Win32ErrorDialog(L"Erro ao salvar arquivo");
+                    break;
                 }
             }
 
             CyString src_code = cy_string_from_text_editor(cy_heap_allocator());
-            HANDLE file = CreateFileW(
-                temp_buf,
-                GENERIC_WRITE, FILE_SHARE_WRITE,
-                NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                NULL
-            );
-            if (file == INVALID_HANDLE_VALUE) {
-                Win32ErrorDialog(L"Erro ao salvar arquivo");
-                goto fsave_cleanup;
-            }
 
-            u16 final_path[PAGE_SIZE] = {0};
-            GetFinalPathNameByHandleW(
-                file, final_path, CY_STATIC_ARR_LEN(final_path), 0
-            );
-            text_buf_copy_from(&g_bufs.file_path, final_path);
-            text_buf_recalc_len(&g_bufs.file_path);
+            u16 path_final[PATH_BUF_CAP] = {0};
+            isize path_final_cap = CY_STATIC_ARR_LEN(path_final);
+            file_path_from_handle(g_state.file, path_final, path_final_cap);
+
             g_state.scratch_file = false;
+
+            SetFilePointer(g_state.file, 0, NULL, FILE_BEGIN);
+            SetEndOfFile(g_state.file);
 
             isize bytes_written = 0;
             b32 written = WriteFile(
-                file,
+                g_state.file,
                 src_code,
                 cy_string_len(src_code),
                 (LPDWORD)&bytes_written,
                 NULL
             );
-            CloseHandle(file);
             if (!written) {
                 Win32ErrorDialog(L"Erro ao escrever texto no arquivo");
                 goto fsave_cleanup;
             }
 
             Win32SetLogAreaText(NULL);
-            Win32SetStatusbarText(&g_bufs.file_path);
+            Win32SetStatusbarText(path_final);
 
         fsave_cleanup:
-            page_free(src_code);
+            cy_string_free(src_code);
         } break;
         case BUTTON_TEXT_COPY:  {
             SendMessageW(g_controls.text_editor, WM_COPY, 0, 0);
@@ -1350,26 +1199,21 @@ LRESULT CALLBACK Win32WindowCallback(
             String src_view = cy_string_view_create(src_code);
             output = compile(src_view);
 
-            isize output_utf16_len;
-            output_utf16 = Win32UTF8toUTF16(
-                output, cy_string_len(output), &output_utf16_len
-            );
+            output_utf16 = Win32UTF8toUTF16(output);
             Win32SetLogAreaText(output_utf16);
 
         compile_cleanup:
-            cy_string_free(src_code);
+            cy_string_16_free(output_utf16);
             cy_string_free(output);
-            page_free(output_utf16);
+            cy_string_free(src_code);
         } break;
         case BUTTON_DISPLAY_GROUP: {
-            if (g_state.members == NULL) {
+            if (g_bufs.members == NULL) {
                 HANDLE file = CreateFileW(
                     L"integrantes.txt",
-                    GENERIC_READ,
-                    FILE_SHARE_READ,
+                    GENERIC_READ, FILE_SHARE_READ,
                     NULL,
-                    OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
                     NULL
                 );
 
@@ -1380,7 +1224,7 @@ LRESULT CALLBACK Win32WindowCallback(
                 isize members_cap = prefix_len + err_suffix_len;
 
                 LARGE_INTEGER file_size = {0};
-                if (file != INVALID_HANDLE_VALUE) {
+                if (g_state.file != INVALID_HANDLE_VALUE) {
                     GetFileSizeEx(file, &file_size);
                     members_cap = prefix_len + file_size.QuadPart;
                 }
@@ -1393,6 +1237,7 @@ LRESULT CALLBACK Win32WindowCallback(
                     break;
                 }
 
+                // TODO(cya): check this for mem errors
                 members = cy_string_append_c(members, prefix);
                 if (file != INVALID_HANDLE_VALUE) {
                     isize bytes_read = 0;
@@ -1403,18 +1248,16 @@ LRESULT CALLBACK Win32WindowCallback(
                     ASSERT(bytes_read == (isize)file_size.QuadPart);
                     CloseHandle(file);
                 } else {
-                    members = cy_string_append_len(members, "    ", 4);
-                    members = cy_string_append_c(members, err_suffix);
+                    members = cy_string_append_fmt(members, "\t%s", err_suffix);
                 }
 
-                isize members_utf16_len;
-                u16 *members_utf16 = Win32UTF8toUTF16(
-                    members, members_cap, &members_utf16_len
-                );
-                g_state.members = members_utf16;
+                cy__string_set_len(members, cy_str_len(members));
+                CyString16 members_utf16 = Win32UTF8toUTF16(members);
+                g_bufs.members = members_utf16;
+                cy_string_free(members);
             }
 
-            Win32SetLogAreaText(g_state.members);
+            Win32SetLogAreaText(g_bufs.members);
         } break;
         default : {
             switch (HIWORD(w_param)) {
@@ -1448,8 +1291,10 @@ int WINAPI wWinMain(
 ) {
     (void)instance, (void)prev_instance, (void)cmd_line, (void)cmd_show;
 
-    g_bufs.lines = text_buf_alloc((MAX_LINE_DIGITS + 2) * 20);
-    g_bufs.file_path = text_buf_alloc(MAX_PATH);
+    g_allocs.page = cy_page_allocator();
+    g_bufs.lines = cy_string_16_create_reserve(
+        g_allocs.page, (MAX_LINE_DIGITS + 2) * 20
+    );
 
     const u16 *CLASS_NAME = L"compiler_gui_window";
     WNDCLASSW window_class = {

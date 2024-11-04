@@ -173,17 +173,6 @@ static isize keyword_map_lookup(KeywordMap *map, String key)
     return map->data[idx];
 }
 
-#if 0
-// TODO(cya): implement this business (prob inside cy.h)
-static const Utf8AcceptRange g_utf8_accept_ranges[] = {
-    {0x80, 0xBF},
-    {0xA0, 0xBF},
-    {0x80, 0x9F},
-    {0x90, 0xBF},
-    {0x80, 0x8F},
-};
-#endif
-
 static isize utf8_decode(String str, Rune *rune_out)
 {
     if (str.len < 1) {
@@ -1587,10 +1576,6 @@ static inline void parser_stack_push(
     }
 
     item.ast_entry = ast_entry == NULL ? p->cur_node : ast_entry;
-    // if (item.ast_entry == NULL) {
-    //     item.ast_entry = p->cur_node;
-    // }
-
     p->stack.items[p->stack.len++] = item;
 }
 

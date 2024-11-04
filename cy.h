@@ -569,8 +569,10 @@ CY_DEF CyString16 cy_string_16_reserve_space_for(
     CyString16 str, isize extra_len
 );
 CY_DEF CyString16 cy_string_16_shrink(CyString16 str);
+CY_DEF CyString16 cy_string_16_resize(CyString16 str, isize new_cap);
 CY_DEF void cy_string_16_free(CyString16 str);
 
+CY_DEF void cy_string_16_clear(CyString16 str);
 CY_DEF CyString16 cy_string_16_append_len(CyString16 str, const wchar_t *other, isize len);
 CY_DEF CyString16 cy_string_16_append(CyString16 str, const CyString16 other);
 CY_DEF CyString16 cy_string_16_append_c(CyString16 str, const wchar_t *other);
@@ -2155,13 +2157,34 @@ CyString16 cy_string_16_shrink(CyString16 str)
     isize header_size = sizeof(CyStringHeader);
     isize old_size = header_size + CY__U16S_TO_BYTES(cap + 1);
     isize new_size = header_size + CY__U16S_TO_BYTES(len + 1);
-    void *ptr = str - header_size;
+    void *ptr = (u8*)str - header_size;
     if (new_size < old_size) {
         ptr = cy_resize(CY_STRING_HEADER(str)->alloc, ptr, old_size, new_size);
         str = (CyString16)((u8*)ptr + header_size);
         cy__string_16_set_cap(str, len);
     }
 
+    return str;
+}
+
+inline CyString16 cy_string_16_resize(CyString16 str, isize new_cap)
+{
+    void *mem = CY_STRING_HEADER(str);
+    CyStringHeader *header = mem;
+    CyAllocator a = header->alloc;
+
+    isize header_size = sizeof(*header);
+    isize old_cap = cy_string_16_cap(str);
+    isize old_size = header_size + CY__U16S_TO_BYTES(old_cap + 1);
+    isize new_size = header_size + CY__U16S_TO_BYTES(new_cap + 1);
+    void *new_mem = cy_resize(a, mem, old_size, new_size);
+    CY_VALIDATE_PTR(new_mem);
+
+    header = new_mem;
+    header->alloc = a;
+
+    str = (CyString16)(header + 1);
+    cy__string_16_set_cap(str, new_cap);
     return str;
 }
 
@@ -2172,8 +2195,19 @@ inline void cy_string_16_free(CyString16 str)
     }
 }
 
-CyString16 cy_string_16_append_len(CyString16 str, const wchar_t *other, isize len)
+inline void cy_string_16_clear(CyString16 str)
 {
+    if (str == NULL) {
+        return;
+    }
+
+    cy_mem_zero(str, CY__U16S_TO_BYTES(cy_string_16_cap(str)));
+    cy__string_16_set_len(str, 0);
+}
+
+CyString16 cy_string_16_append_len(
+    CyString16 str, const wchar_t *other, isize len
+) {
     if (len > 0) {
         isize cur_len = cy_string_16_len(str);
 
@@ -2205,7 +2239,7 @@ inline CyString16 cy_string_16_append_c(CyString16 str, const wchar_t *other)
 #if 0
 inline CyString16 cy_string_16_append_rune(CyString16 str, Rune r)
 {
-    
+
 }
 #endif
 
@@ -2216,8 +2250,8 @@ CyString16 cy_string_16_append_fmt(CyString16 str, const wchar_t *fmt, ...)
 
     // TODO(cya): maybe have some fancier size handling than this?
     wchar_t buf[0x1000] = {0};
-    
-    isize len = vsnwprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
+
+    isize len = _vsnwprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
 
     va_end(va);
     return cy_string_16_append_len(str, buf, len);
