@@ -632,8 +632,11 @@ static void Win32UpdateLineNumbers(void)
 #define MIN(a, b) (a < b ? a : b)
 #define MAX(a, b) (a > b ? a : b)
 
+#define REDRAW_FLAGS RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN
+
 static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
 {
+    isize old_splitter_top = g_state.splitter_top;
     isize height = g_client.height;
 
     isize edit_height = splitter_top - TOOLBAR_HEIGHT;
@@ -683,6 +686,8 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
             SPLITTER_HEIGHT + log_height + STATUSBAR_HEIGHT
     );
 
+    SendMessageW(parent, WM_SETREDRAW, FALSE, 0);
+
     const UINT SWP_FLAGS =
         SWP_NOCOPYBITS | SWP_NOREDRAW | SWP_NOZORDER | SWP_NOREPOSITION;
     HDWP window_pos = BeginDeferWindowPos(3);
@@ -711,24 +716,36 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
         SWP_FLAGS
     );
     EndDeferWindowPos(window_pos);
+    SendMessageW(parent, WM_SETREDRAW, TRUE, 0);
 
-    isize top =
-        MIN(splitter_top, g_state.splitter_top) - SCROLLBAR_SIZE - PADDING_PX;
-    isize bottom =
-        MAX(splitter_top, g_state.splitter_top) + SPLITTER_HEIGHT + PADDING_PX;
-    RECT resize_rect = {
+    // FIXME(cya): fast dragging skips some of the update region
+    const isize RESIZE_PADDING = 16;
+    isize top = MIN(splitter_top, old_splitter_top) -
+        SCROLLBAR_SIZE - 1 - RESIZE_PADDING;
+    isize bottom = MAX(splitter_top, old_splitter_top) +
+        SPLITTER_HEIGHT + SCROLLBAR_SIZE + 1 + RESIZE_PADDING;
+
+    g_state.splitter_top = splitter_top;
+
+    RECT splitter_rect = {
         .top = top,
         .bottom = bottom,
         .right = g_client.width,
     };
-    g_state.splitter_top = splitter_top;
+    RedrawWindow(parent, &splitter_rect, NULL, REDRAW_FLAGS);
 
-    RedrawWindow(parent, &resize_rect, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
-    InvalidateRect(parent, &resize_rect, TRUE);
+    RECT scroll_rect = {
+        .top = edit_y,
+        .bottom = log_y + log_height,
+        .left = g_client.width - SCROLLBAR_SIZE - RESIZE_PADDING,
+        .right = g_client.width,
+    };
+    RedrawWindow(parent, &scroll_rect, NULL, REDRAW_FLAGS);
 }
 
 static void Win32UpdateControls(HWND parent)
 {
+    SendMessageW(parent, WM_SETREDRAW, FALSE, 0);
     SendMessageW(g_controls.toolbar, TB_AUTOSIZE, 0, 0);
     MoveWindow(
         g_controls.statusbar,
@@ -743,8 +760,8 @@ static void Win32UpdateControls(HWND parent)
         log_rect.height - SCROLLBAR_SIZE - SPLITTER_HEIGHT;
     Win32ResizeTextAreas(parent, g_state.splitter_top);
 
-    RedrawWindow(parent, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
-    InvalidateRect(parent, NULL, TRUE);
+    SendMessageW(parent, WM_SETREDRAW, TRUE, 0);
+    RedrawWindow(parent, NULL, NULL, REDRAW_FLAGS);
 }
 
 LRESULT CALLBACK Win32TextEditorCallback(
@@ -760,7 +777,10 @@ LRESULT CALLBACK Win32TextEditorCallback(
     case WM_PAINT: {
         Win32UpdateLineNumbers();
     } break;
-    // TODO(cya): figure out a way to disable the BitBlts() for good
+    case WM_WINDOWPOSCHANGING: {
+        DefSubclassProc(control, message, w_param, l_param);
+        ((WINDOWPOS*)l_param)->flags |= SWP_NOCOPYBITS;
+    } break;
     case WM_PASTE: {
         if (!OpenClipboard(NULL)) {
             break;
@@ -1237,7 +1257,6 @@ LRESULT CALLBACK Win32WindowCallback(
                     break;
                 }
 
-                // TODO(cya): check this for mem errors
                 members = cy_string_append_c(members, prefix);
                 if (file != INVALID_HANDLE_VALUE) {
                     isize bytes_read = 0;
@@ -1298,6 +1317,7 @@ int WINAPI wWinMain(
 
     const u16 *CLASS_NAME = L"compiler_gui_window";
     WNDCLASSW window_class = {
+        // .style = CS_HREDRAW | CS_VREDRAW,
         .lpfnWndProc = Win32WindowCallback,
         .hInstance = instance,
         .lpszClassName = CLASS_NAME,
@@ -1320,10 +1340,10 @@ int WINAPI wWinMain(
     g_state.min_x = width;
     g_state.min_y = height;
     HWND window = CreateWindowExW(
-        0,
+        WS_EX_COMPOSITED,
         CLASS_NAME,
         L"compilador 2024-2",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT,
         width,
         height,
