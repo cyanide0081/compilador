@@ -173,17 +173,6 @@ static isize keyword_map_lookup(KeywordMap *map, String key)
     return map->data[idx];
 }
 
-#if 0
-// TODO(cya): implement this business (prob inside cy.h)
-static const Utf8AcceptRange g_utf8_accept_ranges[] = {
-    {0x80, 0xBF},
-    {0xA0, 0xBF},
-    {0x80, 0x9F},
-    {0x90, 0xBF},
-    {0x80, 0x8F},
-};
-#endif
-
 static isize utf8_decode(String str, Rune *rune_out)
 {
     if (str.len < 1) {
@@ -396,7 +385,7 @@ static inline void tokenizer_error(
     t->err_desc = (const u8*)err_desc;
 }
 
-static inline void tokenizer_parse_numerical_constant(
+static inline void tokenizer_parse_numeric_constant(
     Tokenizer *t, Token *token_out
 ) {
     if (t->cur_rune != '0') {
@@ -578,7 +567,7 @@ static Token tokenizer_get_token(Tokenizer *t)
         case '7':
         case '8':
         case '9': {
-            tokenizer_parse_numerical_constant(t, &token);
+            tokenizer_parse_numeric_constant(t, &token);
         } break;
         case '"': {
             tokenizer_parse_string_literal(t, &token);
@@ -1108,12 +1097,30 @@ static GrammarRule g_ll1_table[LL1_ROW_COUNT][LL1_COL_COUNT] = {
     },
 };
 
+typedef enum {
+    AST_LIT_INT,
+    AST_LIT_FLOAT,
+    AST_LIT_STRING,
+    AST_LIT_BOOL,
+} AstLiteralKind;
+
+typedef struct {
+    AstLiteralKind kind;
+    union {
+        isize i;
+        f64 f;
+        CyString s;
+        b32 b;
+    } u;
+} AstLiteral;
+
 #define AST_KINDS \
     AST_KIND(IDENT, struct { \
         Token tok; \
     }) \
     AST_KIND(LITERAL, struct { \
         Token tok; \
+        AstLiteral val; \
     }) \
     AST_KIND(MAIN, struct { \
         AstNode *body; \
@@ -1319,8 +1326,6 @@ static inline void ast_expr_insert_node(AstNode *expr, AstNode *node)
     }
 }
 
-//ast_expr_insert_token
-
 static inline void ast_binary_expr_reduce(CyAllocator a, AstNode *expr)
 {
     CY_ASSERT(expr->kind == AST_KIND_BINARY_EXPR);
@@ -1331,6 +1336,85 @@ static inline void ast_binary_expr_reduce(CyAllocator a, AstNode *expr)
     AstNode *child = e->left;
     cy_mem_copy(expr, child, sizeof(*expr));
     cy_free(a, child);
+}
+
+static inline isize parse_int(const Token *tok)
+{
+    CY_ASSERT(tok->kind == C_TOKEN_INTEGER);
+
+    isize res = 0;
+    const u8 *start = tok->str.text, *cur = start + tok->str.len - 1;
+    for (isize mul = 1; cur >= start; mul *= 10) {
+        res += (*cur-- - '0') * mul;
+    }
+
+    return res;
+}
+
+static inline f64 parse_float(const Token *tok)
+{
+    CY_ASSERT(tok->kind == C_TOKEN_FLOAT);
+
+    isize len = 0;
+    const u8 *start, *end;
+    end = start = tok->str.text;
+    while (*end != ',') {
+        end += 1, len += 1;
+    }
+
+    isize whole_part = parse_int(&(Token){
+        .kind = C_TOKEN_INTEGER,
+        .str = cy_string_view_create_len((const char*)start, len),
+    });
+
+    f64 div = 10.0;
+    start = end + 1;
+    end = tok->str.text + tok->str.len;
+    while (*start == '0') {
+        div *= 10.0;
+        start += 1;
+    }
+
+    len = end - start;
+    isize decimal_part = parse_int(&(Token){
+        .kind = C_TOKEN_INTEGER,
+        .str = cy_string_view_create_len((const char*)start, len),
+    });
+
+    return (f64)whole_part + (f64)decimal_part / div;
+}
+
+static inline CyString parse_string(CyAllocator a, const Token *tok)
+{
+    CY_ASSERT(tok->kind == C_TOKEN_STRING);
+
+    CyString str = cy_string_create_view(a, tok->str);
+
+#ifdef CY_OS_WINDOWS
+    // TODO(cya): convert from UTF-8 to ANSI Windows codepage (CP_ACP)
+    isize utf16_len = MultiByteToWideChar(
+        CP_UTF8, 0, str, cy_string_len(str), NULL, 0
+    );
+    wchar_t *utf16 = cy_alloc(a, (utf16_len + 1) * sizeof(*utf16));
+    MultiByteToWideChar(CP_UTF8, 0, str, cy_string_len(str), utf16, utf16_len);
+
+    isize ansi_len = WideCharToMultiByte(
+        CP_OEMCP, 0, utf16, utf16_len, NULL, 0, NULL, NULL
+    );
+    CyString ansi = cy_string_create_reserve(a, ansi_len + 1);
+    WideCharToMultiByte(
+        CP_OEMCP, 0, utf16, utf16_len, ansi, ansi_len, NULL, NULL
+    );
+    cy__string_set_len(ansi, ansi_len);
+
+    printf("ansi: `%s`\n", ansi);
+
+    cy_string_free(str);
+    cy_free(a, utf16);
+    str = ansi;
+#endif
+
+    return str;
 }
 
 static inline void ast_node_read_token(AstNode *node, Token *tok)
@@ -1380,15 +1464,29 @@ static inline void ast_node_read_token(AstNode *node, Token *tok)
     } break;
     case AST_KIND_LITERAL: {
         switch (tok->kind) {
-        case C_TOKEN_INTEGER:
-        case C_TOKEN_FLOAT:
-        case C_TOKEN_STRING:
-        case C_TOKEN_TRUE:
+        case C_TOKEN_INTEGER: {
+            node->u.LITERAL.val.u.i = parse_int(tok);
+        } break;
+        case C_TOKEN_FLOAT: {
+            node->u.LITERAL.val.u.f = parse_float(tok);
+        } break;
+        case C_TOKEN_STRING: {
+#if 0
+            CyAllocator a = cy_heap_allocator();
+            node->u.LITERAL.val.u.s = parse_string(a, tok);
+            cy_string_free(node->u.LITERAL.val.u.s);
+#endif
+        } break;
+        case C_TOKEN_TRUE: {
+            node->u.LITERAL.val.u.b = true;
+        } break;
         case C_TOKEN_FALSE: {
-            dest = &node->u.LITERAL.tok;
+            node->u.LITERAL.val.u.b = false;
         } break;
         default: return;
         }
+
+        dest = &node->u.LITERAL.tok;
     } break;
     case AST_KIND_IDENT: {
         if (tok->kind != C_TOKEN_IDENT) {
@@ -1478,10 +1576,6 @@ static inline void parser_stack_push(
     }
 
     item.ast_entry = ast_entry == NULL ? p->cur_node : ast_entry;
-    // if (item.ast_entry == NULL) {
-    //     item.ast_entry = p->cur_node;
-    // }
-
     p->stack.items[p->stack.len++] = item;
 }
 
