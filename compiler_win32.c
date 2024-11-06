@@ -1,3 +1,7 @@
+#ifndef UNICODE
+#define UNICODE
+#endif
+
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
@@ -315,7 +319,8 @@ static void Win32SetupControls(HWND parent)
             WS_SCROLLABLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
     };
 
-    g_controls.toolbar = CreateWindowW(
+    g_controls.toolbar = CreateWindowExW(
+        WS_EX_COMPOSITED,
         TOOLBARCLASSNAMEW,
         NULL,
         WS_CHILD | TBSTYLE_WRAPABLE,
@@ -379,7 +384,8 @@ static void Win32SetupControls(HWND parent)
     SendMessageW(g_controls.toolbar, TB_AUTOSIZE, 0, 0);
     ShowWindow(g_controls.toolbar, TRUE);
 
-    g_controls.line_numbers = CreateWindowW(
+    g_controls.line_numbers = CreateWindowExW(
+        WS_EX_COMPOSITED,
         WC_STATICW,
         NULL,
         WS_DEFAULT | SS_RIGHT | SS_EDITCONTROL,
@@ -392,7 +398,8 @@ static void Win32SetupControls(HWND parent)
 
     isize editor_height = g_client.height - TOOLBAR_HEIGHT -
         STATUSBAR_HEIGHT - LOG_AREA_HEIGHT - SPLITTER_HEIGHT;
-    g_controls.text_editor = CreateWindowW(
+    g_controls.text_editor = CreateWindowExW(
+        WS_EX_COMPOSITED,
         WC_EDITW,
         L"#",
         WS_TEXT_AREA | ES_WANTRETURN | WS_CLIPSIBLINGS,
@@ -409,7 +416,7 @@ static void Win32SetupControls(HWND parent)
 
     const isize EDIT_CHAR_LEN = 4;
     const isize tab_width = 4 * EDIT_CHAR_LEN;
-    SendMessageW(g_controls.text_editor, EM_SETTABSTOPS, 1, (LPARAM)&tab_width);
+    Edit_SetTabStops(g_controls.text_editor, 1, &tab_width);
 
     {
         int y = 2 +
@@ -419,10 +426,11 @@ static void Win32SetupControls(HWND parent)
             0, y + TOOLBAR_HEIGHT, 0, 0,
             SWP_NOSIZE
         );
-        SetWindowTextW(g_controls.text_editor, NULL);
+        Edit_SetText(g_controls.text_editor, NULL);
     }
 
-    g_controls.log_area = CreateWindowW(
+    g_controls.log_area = CreateWindowExW(
+        WS_EX_COMPOSITED,
         WC_EDITW,
         NULL,
         WS_TEXT_AREA | ES_READONLY,
@@ -433,9 +441,10 @@ static void Win32SetupControls(HWND parent)
         NULL,
         NULL
     );
-    SendMessageW(g_controls.log_area, EM_SETTABSTOPS, 1, (LPARAM)&tab_width);
+    Edit_SetTabStops(g_controls.log_area, 1, &tab_width);
 
-    g_controls.statusbar = CreateWindowW(
+    g_controls.statusbar = CreateWindowExW(
+        WS_EX_COMPOSITED,
         STATUSCLASSNAMEW,
         SCRATCH_FILE_TEXT,
         WS_DEFAULT | SBARS_SIZEGRIP,
@@ -590,8 +599,8 @@ static CyString16 cy_string_16_convert_newlines(CyAllocator a, String16 src)
 
 static void Win32UpdateLineNumbers(void)
 {
-    isize first_visible_line = 1 + SendMessageW(
-        g_controls.text_editor, EM_GETFIRSTVISIBLELINE, 0, 0
+    isize first_visible_line = 1 + Edit_GetFirstVisibleLine(
+        g_controls.text_editor
     );
 
     RECT text_rect = {0};
@@ -632,11 +641,11 @@ static void Win32UpdateLineNumbers(void)
 #define MIN(a, b) (a < b ? a : b)
 #define MAX(a, b) (a > b ? a : b)
 
-#define REDRAW_FLAGS RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN
+#define REDRAW_FLAGS RDW_ERASE | RDW_FRAME | \
+    RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW
 
 static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
 {
-    isize old_splitter_top = g_state.splitter_top;
     isize height = g_client.height;
 
     isize edit_height = splitter_top - TOOLBAR_HEIGHT;
@@ -686,10 +695,10 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
             SPLITTER_HEIGHT + log_height + STATUSBAR_HEIGHT
     );
 
-    SendMessageW(parent, WM_SETREDRAW, FALSE, 0);
 
     const UINT SWP_FLAGS =
         SWP_NOCOPYBITS | SWP_NOREDRAW | SWP_NOZORDER | SWP_NOREPOSITION;
+    SendMessageW(parent, WM_SETREDRAW, FALSE, 0);
     HDWP window_pos = BeginDeferWindowPos(3);
     DeferWindowPos(
         window_pos,
@@ -718,12 +727,11 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
     EndDeferWindowPos(window_pos);
     SendMessageW(parent, WM_SETREDRAW, TRUE, 0);
 
-    // FIXME(cya): fast dragging skips some of the update region
     const isize RESIZE_PADDING = 16;
-    isize top = MIN(splitter_top, old_splitter_top) -
+    isize top = MIN(splitter_top, g_state.splitter_top) -
         SCROLLBAR_SIZE - 1 - RESIZE_PADDING;
-    isize bottom = MAX(splitter_top, old_splitter_top) +
-        SPLITTER_HEIGHT + SCROLLBAR_SIZE + 1 + RESIZE_PADDING;
+    isize bottom = MAX(splitter_top, g_state.splitter_top) +
+        SPLITTER_HEIGHT + 1 + RESIZE_PADDING;
 
     g_state.splitter_top = splitter_top;
 
@@ -756,9 +764,9 @@ static void Win32UpdateControls(HWND parent)
 
     Win32ClientDimensions log_rect =
         Win32GetClientDimensions(g_controls.log_area);
-    g_state.splitter_top = g_client.height - STATUSBAR_HEIGHT -
+    isize splitter_top = g_client.height - STATUSBAR_HEIGHT -
         log_rect.height - SCROLLBAR_SIZE - SPLITTER_HEIGHT;
-    Win32ResizeTextAreas(parent, g_state.splitter_top);
+    Win32ResizeTextAreas(parent, splitter_top);
 
     SendMessageW(parent, WM_SETREDRAW, TRUE, 0);
     RedrawWindow(parent, NULL, NULL, REDRAW_FLAGS);
@@ -777,10 +785,6 @@ LRESULT CALLBACK Win32TextEditorCallback(
     case WM_PAINT: {
         Win32UpdateLineNumbers();
     } break;
-    case WM_WINDOWPOSCHANGING: {
-        DefSubclassProc(control, message, w_param, l_param);
-        ((WINDOWPOS*)l_param)->flags |= SWP_NOCOPYBITS;
-    } break;
     case WM_PASTE: {
         if (!OpenClipboard(NULL)) {
             break;
@@ -791,7 +795,7 @@ LRESULT CALLBACK Win32TextEditorCallback(
             goto clip_cleanup;
         }
 
-        u16 *clip_text = (u16*)(GlobalLock(clipboard));
+        u16 *clip_text = GlobalLock(clipboard);
         GlobalUnlock(clipboard);
         if (clip_text == NULL) {
             goto clip_cleanup;
@@ -882,9 +886,9 @@ UINT_PTR Win32DialogHook(
 
 static inline CyString cy_string_from_text_editor(CyAllocator a)
 {
-    isize len = GetWindowTextLengthW(g_controls.text_editor);
+    isize len = Edit_GetTextLength(g_controls.text_editor);
     CyString16 utf16 = cy_string_16_create_reserve(a, len);
-    GetWindowTextW(g_controls.text_editor, utf16, len + 1);
+    Edit_GetText(g_controls.text_editor, utf16, len + 1);
     cy__string_16_set_len(utf16, len);
 
     CyString utf8 = Win32UTF16toUTF8(utf16);
@@ -1012,7 +1016,7 @@ LRESULT CALLBACK Win32WindowCallback(
             g_state.scratch_file = true;
 
             Win32UpdateLineNumbers();
-            SetWindowTextW(g_controls.text_editor, NULL);
+            Edit_SetText(g_controls.text_editor, NULL);
             SetWindowTextW(g_controls.log_area, NULL);
             SetWindowTextW(g_controls.statusbar, SCRATCH_FILE_TEXT);
         } break;
@@ -1096,7 +1100,7 @@ LRESULT CALLBACK Win32WindowCallback(
             final_buf = cy_string_16_convert_newlines(
                 g_allocs.page, cy_string_16_view_create(utf16_buf)
             );
-            SetWindowTextW(g_controls.text_editor, final_buf);
+            Edit_SetText(g_controls.text_editor, final_buf);
 
             Win32SetLogAreaText(NULL);
             Win32SetStatusbarText(path_final);
@@ -1285,12 +1289,10 @@ LRESULT CALLBACK Win32WindowCallback(
             } break;
             case EN_MAXTEXT: {
                 if ((HWND)l_param == g_controls.text_editor) {
-                    isize new_limit =
-                        2 * GetWindowTextLengthW(g_controls.text_editor);
-                    SendMessageW(
-                        g_controls.text_editor, EM_LIMITTEXT,
-                        new_limit, 0
+                    isize new_limit = 2 * Edit_GetTextLength(
+                        g_controls.text_editor
                     );
+                    Edit_LimitText(g_controls.text_editor, new_limit);
                 }
             } break;
             }
