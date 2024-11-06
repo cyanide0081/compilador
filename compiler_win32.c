@@ -171,6 +171,28 @@ static void Win32AppendExtension(
     CopyMemory(end, ext, CY__U16S_TO_BYTES(ext_len));
 }
 
+static void utf16_from_int(isize n, isize max_digits, u16 *buf, isize cap)
+{
+    isize dividend = 10;
+    isize digits = 1;
+    while (n % dividend != n) {
+        dividend *= 10;
+        digits += 1;
+    }
+
+    while (digits > max_digits) {
+        dividend /= 10;
+        n %= dividend;
+        digits -= 1;
+    }
+
+    for (isize i = 0; i < digits && i < cap; i++) {
+        dividend /= 10;
+        buf[i] = L'0' + n / dividend;
+        n %= dividend;
+    }
+}
+
 static void utf16_insert_dots(u16 *str, b32 null_terminate)
 {
     enum {
@@ -630,9 +652,11 @@ static void Win32UpdateLineNumbers(void)
     cy_string_16_clear(g_bufs.lines);
     cy_string_16_resize(g_bufs.lines, len);
 
+    u16 num_buf[MAX_LINE_DIGITS + 1] = {0};
     CyString16 buf = g_bufs.lines;
     for (isize i = first_visible_line; i <= last_visible_line; i++) {
-        buf = cy_string_16_append_fmt(buf, L"%td\r\n", i);
+        utf16_from_int(i, MAX_LINE_DIGITS, num_buf, CY_STATIC_ARR_LEN(num_buf));
+        buf = cy_string_16_append_fmt(buf, L"%ls\r\n", num_buf);
     }
 
     SetWindowTextW(g_controls.line_numbers, buf);
