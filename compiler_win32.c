@@ -1004,23 +1004,6 @@ LRESULT CALLBACK Win32WindowCallback(
 
             cursor_y = new_cursor_y;
 
-            RECT window_rect;
-            GetWindowRect(window, &window_rect);
-            POINT client_point = {0};
-            ClientToScreen(window, &client_point);
-            isize titlebar_height = client_point.y - window_rect.top;
-
-            isize min_y = window_rect.top + titlebar_height +
-                    TOOLBAR_HEIGHT + TEXT_AREA_MIN_HEIGHT + SCROLLBAR_SIZE;
-            isize max_y = window_rect.bottom - STATUSBAR_HEIGHT -
-                TEXT_AREA_MIN_HEIGHT - SCROLLBAR_SIZE - SPLITTER_HEIGHT;
-            ClipCursor(&(RECT){
-                .top = min_y,
-                .bottom = max_y,
-                .left = window_rect.left,
-                .right = window_rect.right
-            });
-
             isize new_splitter_top = cursor_y - SPLITTER_HEIGHT / 2;
             Win32ResizeTextAreas(window, new_splitter_top);
         }
