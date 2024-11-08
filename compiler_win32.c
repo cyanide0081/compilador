@@ -33,6 +33,7 @@ typedef struct {
     HANDLE file;
     b8 scratch_file;
     b8 resizing_splitter;
+    u16 char_height;
 } GlobalState;
 static GlobalState g_state = {
     .scratch_file = true
@@ -423,7 +424,7 @@ static void Win32SetupControls(HWND parent)
     g_controls.text_editor = CreateWindowExW(
         WS_EX_COMPOSITED,
         WC_EDITW,
-        L"#",
+        L"@\r\n@",
         WS_TEXT_AREA | ES_WANTRETURN | WS_CLIPSIBLINGS,
         0, 0, 0, editor_height,
         parent,
@@ -441,11 +442,14 @@ static void Win32SetupControls(HWND parent)
     Edit_SetTabStops(g_controls.text_editor, 1, &tab_width);
 
     {
-        int y = 2 +
-            HIWORD(SendMessageW(g_controls.text_editor, EM_POSFROMCHAR, 0, 0));
+        i32 first_y = HIWORD(SendMessageW(g_controls.text_editor, EM_POSFROMCHAR, 0, 0));
+        i32 second_y = HIWORD(SendMessageW(g_controls.text_editor, EM_POSFROMCHAR, 3, 0));
+        
+        g_state.char_height = second_y - first_y + 1;
+        
         SetWindowPos(
             g_controls.line_numbers, HWND_TOP,
-            0, y + TOOLBAR_HEIGHT, 0, 0,
+            0, 2 + first_y + TOOLBAR_HEIGHT, 0, 0,
             SWP_NOSIZE
         );
         Edit_SetText(g_controls.text_editor, NULL);
@@ -751,11 +755,12 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
     EndDeferWindowPos(window_pos);
     SendMessageW(parent, WM_SETREDRAW, TRUE, 0);
 
-    const isize RESIZE_PADDING = 16;
+    // TODO(cya): calc and account for line count
+    isize resize_padding = g_state.char_height;
     isize top = MIN(splitter_top, g_state.splitter_top) -
-        SCROLLBAR_SIZE - 1 - RESIZE_PADDING;
+        SCROLLBAR_SIZE - 1 - resize_padding;
     isize bottom = MAX(splitter_top, g_state.splitter_top) +
-        SPLITTER_HEIGHT + 1 + RESIZE_PADDING;
+        SPLITTER_HEIGHT + 1 + resize_padding;
 
     g_state.splitter_top = splitter_top;
 
@@ -769,7 +774,7 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
     RECT scroll_rect = {
         .top = edit_y,
         .bottom = log_y + log_height,
-        .left = g_client.width - SCROLLBAR_SIZE - RESIZE_PADDING,
+        .left = g_client.width - SCROLLBAR_SIZE - resize_padding,
         .right = g_client.width,
     };
     RedrawWindow(parent, &scroll_rect, NULL, REDRAW_FLAGS);
@@ -1326,7 +1331,6 @@ int WINAPI wWinMain(
 
     const u16 *CLASS_NAME = L"compiler_gui_window";
     WNDCLASSW window_class = {
-        // .style = CS_HREDRAW | CS_VREDRAW,
         .lpfnWndProc = Win32WindowCallback,
         .hInstance = instance,
         .lpszClassName = CLASS_NAME,
