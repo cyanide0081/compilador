@@ -331,6 +331,9 @@ LRESULT CALLBACK Win32TextEditorCallback(
     (INT_PTR)(label " [" shortcut "]")                           \
 }
 
+#define WIN32_Y_FROM_CHAR(control, _char) \
+    (HIWORD(SendMessageW(control, EM_POSFROMCHAR, _char, 0)))
+
 static void Win32SetupControls(HWND parent)
 {
     g_client = Win32GetClientDimensions(parent);
@@ -442,11 +445,11 @@ static void Win32SetupControls(HWND parent)
     Edit_SetTabStops(g_controls.text_editor, 1, &tab_width);
 
     {
-        i32 first_y = HIWORD(SendMessageW(g_controls.text_editor, EM_POSFROMCHAR, 0, 0));
-        i32 second_y = HIWORD(SendMessageW(g_controls.text_editor, EM_POSFROMCHAR, 3, 0));
-        
+        i32 first_y = WIN32_Y_FROM_CHAR(g_controls.text_editor, 0);
+        i32 second_y = WIN32_Y_FROM_CHAR(g_controls.text_editor, 3);
+
         g_state.char_height = second_y - first_y + 1;
-        
+
         SetWindowPos(
             g_controls.line_numbers, HWND_TOP,
             0, 2 + first_y + TOOLBAR_HEIGHT, 0, 0,
