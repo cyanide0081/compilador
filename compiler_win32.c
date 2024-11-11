@@ -674,6 +674,8 @@ static void Win32UpdateLineNumbers(void)
 
 #define REDRAW_FLAGS RDW_ERASE | RDW_FRAME | \
     RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW
+#define SWP_FLAGS \
+    SWP_NOCOPYBITS | SWP_NOREDRAW | SWP_NOZORDER | SWP_NOREPOSITION
 
 static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
 {
@@ -691,34 +693,10 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
         (splitter_top + SPLITTER_HEIGHT);
 
     isize min_height = TEXT_AREA_MIN_HEIGHT;
-    if (edit_height - SCROLLBAR_SIZE < min_height) {
-        edit_height = min_height + SCROLLBAR_SIZE;
-        splitter_top = edit_y + edit_height;
-        log_y = splitter_top + SPLITTER_HEIGHT;
-        log_height = height - STATUSBAR_HEIGHT -
-            (splitter_top + SPLITTER_HEIGHT);
-    } else if (log_height - SCROLLBAR_SIZE < min_height) {
-        log_height = min_height + SCROLLBAR_SIZE;
-        splitter_top = height - STATUSBAR_HEIGHT - log_height - SPLITTER_HEIGHT;
-        log_y = splitter_top + SPLITTER_HEIGHT;
-        edit_height = splitter_top - TOOLBAR_HEIGHT;
-    }
-
-    isize max_height = height - TEXT_AREA_MIN_HEIGHT -
-        SCROLLBAR_SIZE - STATUSBAR_HEIGHT - TOOLBAR_HEIGHT;
-    if (log_height > max_height) {
-        log_height = max_height;
-        log_y = height - STATUSBAR_HEIGHT - log_height;
-        splitter_top = log_y - SPLITTER_HEIGHT;
-        edit_height = splitter_top - TOOLBAR_HEIGHT;
-        edit_y = splitter_top - edit_height;
-    } else if (edit_height > max_height) {
-        edit_height = max_height;
-        edit_y = TOOLBAR_HEIGHT;
-        splitter_top = edit_y + edit_height;
-        log_y = splitter_top + SPLITTER_HEIGHT;
-        log_height = height - STATUSBAR_HEIGHT -
-            SPLITTER_HEIGHT - edit_height - TOOLBAR_HEIGHT;
+    b32 out_of_bounds = (edit_height - SCROLLBAR_SIZE < min_height) ||
+        (log_height - SCROLLBAR_SIZE < min_height);
+    if (out_of_bounds) {
+        return;
     }
 
     ASSERT(
@@ -726,9 +704,6 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
             SPLITTER_HEIGHT + log_height + STATUSBAR_HEIGHT
     );
 
-
-    const UINT SWP_FLAGS =
-        SWP_NOCOPYBITS | SWP_NOREDRAW | SWP_NOZORDER | SWP_NOREPOSITION;
     SendMessageW(parent, WM_SETREDRAW, FALSE, 0);
     HDWP window_pos = BeginDeferWindowPos(3);
     DeferWindowPos(
