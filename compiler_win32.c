@@ -734,11 +734,12 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
     SendMessageW(parent, WM_SETREDRAW, TRUE, 0);
 
     // TODO(cya): calc and account for line count
+    isize log_line_count = Edit_GetLineCount(g_controls.log_area);
     isize resize_padding = g_state.char_height;
     isize top = MIN(splitter_top, g_state.splitter_top) -
         SCROLLBAR_SIZE - 1 - resize_padding;
     isize bottom = MAX(splitter_top, g_state.splitter_top) +
-        SPLITTER_HEIGHT + 1 + resize_padding;
+        SPLITTER_HEIGHT + 1 + resize_padding * log_line_count;
 
     g_state.splitter_top = splitter_top;
 
@@ -910,8 +911,6 @@ static inline void file_path_from_handle(
 ) {
     GetFinalPathNameByHandleW(file, buf_out, buf_size, 0);
 }
-
-#define MOUSEMOVE_TIMEOUT_MS (1000 / 200)
 
 #define OFN_FLAGS OFN_ENABLEHOOK | OFN_HIDEREADONLY | \
     OFN_LONGNAMES | OFN_NONETWORKBUTTON
@@ -1201,24 +1200,26 @@ LRESULT CALLBACK Win32WindowCallback(
             SendMessageW(g_controls.text_editor, WM_CUT, 0, 0);
         } break;
         case BUTTON_COMPILE: {
-            CyString src_code = cy_string_from_text_editor(cy_heap_allocator());
-            CyString output = NULL;
-            u16 *output_utf16 = NULL;
+            CyString msg = NULL;
+            u16 *msg_utf16 = NULL;
 
+            CyString src_code = cy_string_from_text_editor(cy_heap_allocator());
             if (src_code == NULL) {
                 Win32ErrorDialog(L"Erro ao copiar texto do editor");
                 goto compile_cleanup;
             }
 
-            String src_view = cy_string_view_create(src_code);
-            output = compile(src_view);
+            CompilerOutput output = compile(cy_string_view_create(src_code));
+            msg = output.msg;
 
-            output_utf16 = Win32UTF8toUTF16(output);
-            Win32SetLogAreaText(output_utf16);
+            // TODO(cya): write il code file
+
+            msg_utf16 = Win32UTF8toUTF16(msg);
+            Win32SetLogAreaText(msg_utf16);
 
         compile_cleanup:
-            cy_string_16_free(output_utf16);
-            cy_string_free(output);
+            cy_string_16_free(msg_utf16);
+            cy_string_free(msg);
             cy_string_free(src_code);
         } break;
         case BUTTON_DISPLAY_GROUP: {
@@ -1347,6 +1348,7 @@ int WINAPI wWinMain(
         Win32FatalErrorDialog(L"Erro ao criar janela");
     }
 
+    // TODO(cya): add accelerator for 'compile to exe' button (CTRL+F7)
     ACCEL accels[BUTTON_COUNT] = {
         {FVIRTKEY | FCONTROL, 'N', BUTTON_FILE_NEW},
         {FVIRTKEY | FCONTROL, 'O', BUTTON_FILE_OPEN},

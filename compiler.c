@@ -536,7 +536,8 @@ static Token tokenizer_get_token(Tokenizer *t)
         }
 
         token.str.len = t->cur - token.str.text;
-        b32 not_keyword = cy_string_view_contains(token.str, "_0123456789");
+        b32 not_keyword = rune_is_uppercase(token.str.text[0]) ||
+            cy_string_view_contains(token.str, "_0123456789");
         if (not_keyword) {
             if (token_is_ident(token.str)) {
                 token.kind = C_TOKEN_IDENT;
@@ -607,12 +608,21 @@ static Token tokenizer_get_token(Tokenizer *t)
                 } else if (is_comment) {
                     tokenizer_parse_comment(t, &token);
                 } else {
-                    tokenizer_advance_to_next_rune(t);
-                    token.kind = token_kind_from_string(s);
+                    b32 invalid = (cur_rune == '&' || cur_rune == '|') &&
+                        next_rune != cur_rune;
+                    if (invalid) {
+                        tokenizer_error(t, &token, T_ERR_INVALID_SYMBOL, NULL);
+                    } else {
+                        tokenizer_advance_to_next_rune(t);
+                        token.kind = token_kind_from_string(s);
+                    }
                 }
             } else {
                 tokenizer_advance_to_next_rune(t);
                 token.kind = token_kind_from_string(s);
+                if (token.kind == C_TOKEN_INVALID) {
+                    tokenizer_error(t, &token, T_ERR_INVALID_SYMBOL, NULL);
+                }
             }
         } break;
         default: {
@@ -680,96 +690,17 @@ static TokenList tokenize(CyAllocator a, Tokenizer *t, b32 ignore_comments)
     return list;
 }
 
-#if 0
-static int int_to_utf8(isize n, isize max_digits, char *buf, isize cap)
-{
-    isize dividend = 10;
-    isize digits = 1;
-    while (n % dividend != n) {
-        dividend *= 10;
-        digits += 1;
-    }
-
-    while (digits > max_digits) {
-        dividend /= 10;
-        n %= dividend;
-        digits -= 1;
-    }
-
-    for (isize i = 0; i < digits && i < cap; i++) {
-        dividend /= 10;
-        buf[i] = '0' + n / dividend;
-        n %= dividend;
-    }
-
-    buf[cap] = '\0';
-    return digits;
-}
-
-static CyString append_token_info(
-    CyString str, String line,
-    String kind, String token
-) {
-    CyAllocator a = CY_STRING_HEADER(str)->alloc;
-    CyString new_line = cy_string_create_reserve(a, 0x20);
-    new_line = cy_string_append_view(new_line, line);
-    new_line = cy_string_pad_right(new_line, 10, ' ');
-
-    // TODO(cya): replace with utf8_width
-    isize col_width = cy_utf8_codepoints(new_line) + 22;
-    new_line = cy_string_append_view(new_line, kind);
-    new_line = cy_string_pad_right(new_line, col_width, ' ');
-
-    new_line = cy_string_append_view(new_line, token);
-    str = cy_string_append(str, new_line);
-
-    cy_string_free(new_line);
-    return str;
-}
-
-#define LINE_NUM_MAX_DIGITS 9
-
-static CyString append_tokens_fmt(CyString str, const TokenList *l)
-{
-    str = append_token_info(
-        str,
-        cy_string_view_create_c("linha"),
-        cy_string_view_create_c("classe"),
-        cy_string_view_create_c("lexema")
-    );
-    for (isize i = 0; i < l->len; i++) {
-        Token *t = &l->arr[i];
-
-        char line_buf[LINE_NUM_MAX_DIGITS + 1];
-        isize line_buf_cap = CY_STATIC_STR_LEN(line_buf);
-        isize line_buf_len = int_to_utf8(
-            t->pos.line, line_buf_cap, line_buf, line_buf_cap
-        );
-
-        String line = cy_string_view_create_len(line_buf, line_buf_len);
-        String token_kind = string_from_token_kind(t->kind);
-        String token = t->str;
-
-        str = cy_string_append_c(str, "\r\n");
-        str = append_token_info(str, line, token_kind, token);
-    }
-
-    return str;
-}
-#endif
-
 static inline CyString append_error_prefix(CyString str, TokenPos err_pos)
 {
     return cy_string_append_fmt(str, "Erro na linha %td – ", err_pos.line);
 }
 
-static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
+static CyString tokenizer_append_error_msg(CyString msg, const Tokenizer *t)
 {
     if (t->err == T_ERR_OUT_OF_MEMORY) {
-        return NULL; // NOTE(cya): since we're out of memory
+        return msg; // NOTE(cya): since we're out of memory
     }
 
-    CyString msg = cy_string_create_reserve(a, 0x40);
     msg = append_error_prefix(msg, t->bad_tok.pos);
 
     TokenizerError err = t->err;
@@ -794,7 +725,7 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
         desc = "constante_string inválida";
     } break;
     case T_ERR_INVALID_COMMENT: {
-        desc = "comentário inválido";
+        desc = "comentário de bloco inválido ou não finalizado";
     } break;
     default: {
         desc = "(fatal) erro não reconhecido ao tokenizar código";
@@ -802,9 +733,12 @@ static CyString tokenizer_create_error_msg(CyAllocator a, const Tokenizer *t)
     }
 
     msg = cy_string_append_c(msg, desc);
+
+#if 0
     if (t->err_desc != NULL) {
         msg = cy_string_append_fmt(msg, " (%s)", t->err_desc);
     }
+#endif
 
     return msg;
 }
@@ -871,15 +805,6 @@ const String g_non_terminal_strings[] = {
     NON_TERMINALS
 #undef NON_TERMINAL
 };
-
-static inline String non_terminal_name(NonTerminal n)
-{
-    if (n < 0 || n >= NT_COUNT) {
-        return cy_string_view_create_c("<ERRO>");
-    }
-
-    return g_non_terminal_strings[n];
-}
 
 static inline CyString reachable_terminals(CyAllocator a, NonTerminal n);
 
@@ -1109,7 +1034,7 @@ typedef struct {
     union {
         isize i;
         f64 f;
-        CyString s;
+        String s;
         b32 b;
     } u;
 } AstLiteral;
@@ -1362,7 +1287,7 @@ static inline f64 parse_float(const Token *tok)
         end += 1, len += 1;
     }
 
-    isize whole_part = parse_int(&(Token){
+    f64 whole_part = (f64)parse_int(&(Token){
         .kind = C_TOKEN_INTEGER,
         .str = cy_string_view_create_len((const char*)start, len),
     });
@@ -1376,14 +1301,16 @@ static inline f64 parse_float(const Token *tok)
     }
 
     len = end - start;
-    isize decimal_part = parse_int(&(Token){
+    f64 decimal_part = (f64)parse_int(&(Token){
         .kind = C_TOKEN_INTEGER,
         .str = cy_string_view_create_len((const char*)start, len),
     });
 
-    return (f64)whole_part + (f64)decimal_part / div;
+    return whole_part + decimal_part / div;
 }
 
+// TODO(cya): move this to the code generator section
+#if 0
 static inline CyString parse_string(CyAllocator a, const Token *tok)
 {
     CY_ASSERT(tok->kind == C_TOKEN_STRING);
@@ -1407,8 +1334,6 @@ static inline CyString parse_string(CyAllocator a, const Token *tok)
     );
     cy__string_set_len(ansi, ansi_len);
 
-    printf("ansi: `%s`\n", ansi);
-
     cy_string_free(str);
     cy_free(a, utf16);
     str = ansi;
@@ -1416,6 +1341,7 @@ static inline CyString parse_string(CyAllocator a, const Token *tok)
 
     return str;
 }
+#endif
 
 static inline void ast_node_read_token(AstNode *node, Token *tok)
 {
@@ -1471,11 +1397,7 @@ static inline void ast_node_read_token(AstNode *node, Token *tok)
             node->u.LITERAL.val.u.f = parse_float(tok);
         } break;
         case C_TOKEN_STRING: {
-#if 0
-            CyAllocator a = cy_heap_allocator();
-            node->u.LITERAL.val.u.s = parse_string(a, tok);
-            cy_string_free(node->u.LITERAL.val.u.s);
-#endif
+            node->u.LITERAL.val.u.s = tok->str;
         } break;
         case C_TOKEN_TRUE: {
             node->u.LITERAL.val.u.b = true;
@@ -1622,11 +1544,6 @@ static inline void parser_stack_mark_top_as_frame(Parser *p)
 {
     ParserSymbol *s = parser_stack_peek(p);
     s->is_frame_start = true;
-}
-
-static inline void parser_copy_read_tok(Parser *p, Token *out)
-{
-    cy_mem_copy(out, p->read_tok, sizeof(*out));
 }
 
 static inline void parser_error(Parser *p, ParserErrorKind kind)
@@ -2401,49 +2318,294 @@ static Ast parse(CyAllocator a, Parser *p)
     return ast;
 }
 
-CyString compile(String src_code)
+/* ----------------------------- Checker ------------------------------------ */
+typedef enum {
+    C_ERR_NONE,
+    C_ERR_UNDECLARED_IDENT,
+    C_ERR_REDECLARED_IDENT,
+    C_ERR_INVALID_TYPE,
+} CheckerError;
+
+typedef struct {
+    CheckerError err;
+    Token tok;
+    Token op;
+} CheckerStatus;
+
+static inline b32 is_declared(AstList *decl_idents, Token *ident)
+{
+    String tok = ident->str;
+    for (isize i = 0; i < decl_idents->len; i++) {
+        String other = decl_idents->data[i]->u.IDENT.tok.str;
+        if (cy_string_view_are_equal(tok, other)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static inline CheckerStatus checker_error(CheckerError err, Token *tok)
+{
+    CheckerStatus status = { .err = err };
+    if (tok != NULL) {
+        status.tok = *tok;
+    }
+
+    return status;
+}
+
+static CheckerStatus check_expr(AstNode *expr, AstList *decl_idents)
+{
+    switch (expr->kind) {
+    case AST_KIND_BINARY_EXPR: {
+        CheckerStatus lhs = check_expr(expr->u.BINARY_EXPR.left, decl_idents);
+        if (lhs.err != C_ERR_NONE) {
+            return lhs;
+        }
+
+        CheckerStatus rhs = check_expr(expr->u.BINARY_EXPR.right, decl_idents);
+        if (rhs.err != C_ERR_NONE) {
+            return rhs;
+        }
+    } break;
+    case AST_KIND_UNARY_EXPR:
+    case AST_KIND_PAREN_EXPR: {
+        AstNode *sub = expr->u.UNARY_EXPR.expr;
+        if (AST_KIND_IS_OF_CLASS(sub->kind, EXPR)) {
+            return check_expr(sub, decl_idents);
+        } else switch (sub->kind) {
+        case AST_KIND_IDENT: {
+            return check_expr(sub, decl_idents);
+        } break;
+        default: break;
+        }
+    } break;
+    case AST_KIND_IDENT: {
+        Token *tok = &expr->u.IDENT.tok;
+        if (!is_declared(decl_idents, tok)) {
+            return checker_error(C_ERR_UNDECLARED_IDENT, tok);
+        }
+    } break;
+    default: break;
+    }
+
+    return checker_error(C_ERR_NONE, NULL);
+}
+
+static CheckerStatus check_stmt(AstNode *node, AstList *decl_idents)
+{
+    CheckerStatus status = {0};
+    switch (node->kind) {
+    case AST_KIND_VAR_DECL: {
+        AstList *idents = &node->u.VAR_DECL.ident_list->u.IDENT_LIST.list;
+        for (isize i = 0; i < idents->len; i++) {
+            AstNode *ident = idents->data[i];
+            Token *tok = &ident->u.IDENT.tok;
+            if (is_declared(decl_idents, tok)) {
+                return checker_error(C_ERR_REDECLARED_IDENT, tok);
+            }
+
+            ast_list_append_node(decl_idents, ident);
+        }
+    } break;
+    case AST_KIND_ASSIGN_STMT: {
+        AstList *idents = &node->u.ASSIGN_STMT.ident_list->u.IDENT_LIST.list;
+        for (isize i = 0; i < idents->len; i++) {
+            AstNode *ident = idents->data[i];
+            Token *tok = &ident->u.IDENT.tok;
+            if (!is_declared(decl_idents, tok)) {
+                return checker_error(C_ERR_UNDECLARED_IDENT, tok);
+            }
+        }
+
+        return check_expr(node->u.ASSIGN_STMT.expr, decl_idents);
+    } break;
+    case AST_KIND_READ_STMT: {
+        AstList *inputs = &node->u.READ_STMT.input_list->u.INPUT_LIST.list;
+        for (isize i = 0; i < inputs->len; i++) {
+            Token *tok = &inputs->data[i]->u.INPUT_ARG.ident;
+            if (!is_declared(decl_idents, tok)) {
+                return checker_error(C_ERR_UNDECLARED_IDENT, tok);
+            }
+        }
+    } break;
+    case AST_KIND_WRITE_STMT: {
+        AstList *exprs = &node->u.WRITE_STMT.expr_list->u.EXPR_LIST.list;
+        for (isize i = 0; i < exprs->len; i++) {
+            AstNode *expr = exprs->data[i];
+            status = check_expr(expr, decl_idents);
+            if (status.err != C_ERR_NONE) {
+                return status;
+            }
+        }
+    } break;
+    case AST_KIND_IF_STMT: {
+        AstNode *cond = node->u.IF_STMT.cond;
+        if (cond != NULL) {
+            status = check_expr(cond, decl_idents);
+            if (status.err != C_ERR_NONE) {
+                return status;
+            }
+        }
+
+        AstList *stmts = &node->u.IF_STMT.body->u.STMT_LIST.list;
+        for (isize i = 0; i < stmts->len; i++) {
+            AstNode *stmt = stmts->data[i];
+            status = check_stmt(stmt, decl_idents);
+            if (status.err != C_ERR_NONE) {
+                return status;
+            }
+        }
+
+        AstNode *else_stmt = node->u.IF_STMT.else_stmt;
+        if (else_stmt != NULL) {
+            status = check_stmt(else_stmt, decl_idents);
+        }
+    } break;
+    case AST_KIND_REPEAT_STMT: {
+        AstNode *expr = node->u.REPEAT_STMT.expr;
+        if (expr != NULL) {
+            status = check_expr(expr, decl_idents);
+            if (status.err != C_ERR_NONE) {
+                return status;
+            }
+        }
+
+        AstList *stmts = &node->u.REPEAT_STMT.body->u.STMT_LIST.list;
+        for (isize i = 0; i < stmts->len; i++) {
+            AstNode *stmt = stmts->data[i];
+            status = check_stmt(stmt, decl_idents);
+            if (status.err != C_ERR_NONE) {
+                return status;
+            }
+        }
+    } break;
+    default: break;
+    }
+
+    return status;
+}
+
+static CheckerStatus check(Ast *a)
+{
+    CheckerStatus status = {0};
+    AstList decl_idents = ast_list_init(a->alloc);
+
+    AstList *stmts = &a->root->u.MAIN.body->u.STMT_LIST.list;
+    for (isize i = 0; i < stmts->len; i++) {
+        AstNode *stmt = stmts->data[i];
+        status = check_stmt(stmt, &decl_idents);
+        if (status.err != C_ERR_NONE) {
+            break;
+        }
+    }
+
+    return status;
+}
+
+static inline CyString checker_append_error_msg(CyString msg, CheckerStatus *s)
+{
+    msg = append_error_prefix(msg, s->tok.pos);
+    msg = cy_string_append_fmt(msg, "%.*s ", s->tok.str.len, s->tok.str.text);
+
+    switch (s->err) {
+    case C_ERR_UNDECLARED_IDENT: {
+        msg = cy_string_append_c(msg, "não declarado");
+    } break;
+    case C_ERR_REDECLARED_IDENT: {
+        msg = cy_string_append_c(msg, "já declarado");
+    } break;
+    case C_ERR_INVALID_TYPE: {
+    } break;
+    case C_ERR_NONE: {
+    } break;
+    }
+
+    return msg;
+}
+
+/* ------------------------- Code Generator (MSIL) -------------------------- */
+#if 0
+static CyString generate_il(CyAllocator a, Ast *ast)
+{
+    AstList *stmts = &ast->root->u.MAIN.body->u.STMT_LIST.list;
+    isize init_cap = 10 * stmts->len;
+    CyString code = cy_string_create_reserve(a, init_cap);
+    for (isize i = 0; i < stmts->len; i++) {
+        AstNode *stmt = stmts->data[i];
+        code = insert_line();
+    }
+
+    return NULL;
+}
+#endif
+
+typedef struct {
+    CyString msg;
+    CyString code;
+} CompilerOutput;
+
+CompilerOutput compile(String src_code)
 {
 #ifdef CY_DEBUG
     CyTicks start = cy_ticks_query();
 #endif
 
-    CyArena tokenizer_arena = cy_arena_init(cy_heap_allocator(), 0x4000);
-    CyAllocator temp_allocator = cy_arena_allocator(&tokenizer_arena);
     CyAllocator heap_allocator = cy_heap_allocator();
+    CyArena tokenizer_arena = cy_arena_init(heap_allocator, 0x4000);
+    CyAllocator temp_allocator = cy_arena_allocator(&tokenizer_arena);
 
-    Tokenizer t = tokenizer_init(src_code);
-    TokenList token_list = tokenize(temp_allocator, &t, true);
-    if (t.err != T_ERR_NONE) {
-        cy_free_all(temp_allocator);
-        return tokenizer_create_error_msg(heap_allocator, &t);
+    CyStack parser_stack = {0};
+
+    CyString code = NULL;
+    isize init_cap = 0x100;
+    CyString msg = cy_string_create_reserve(heap_allocator, init_cap);
+    Tokenizer tokenizer = tokenizer_init(src_code);
+    TokenList token_list = tokenize(temp_allocator, &tokenizer, true);
+    if (tokenizer.err != T_ERR_NONE) {
+        msg = tokenizer_append_error_msg(msg, &tokenizer);
+        goto cleanup;
     }
 
     isize stack_size = token_list.len * sizeof(ParserSymbol);
-    CyStack parser_stack = cy_stack_init(heap_allocator, stack_size);
+    parser_stack = cy_stack_init(heap_allocator, stack_size);
     CyAllocator stack_allocator = cy_stack_allocator(&parser_stack);
-    Parser p = parser_init(stack_allocator, &token_list);
+    Parser parser = parser_init(stack_allocator, &token_list);
 
     // TODO(cya): use pool allocator when implemented
-    Ast a = parse(temp_allocator, &p);
-
-    CY_UNUSED(a); // TODO(cya): remove when the ast is actually used
-
-    isize init_cap = 0x100;
-    CyString output = cy_string_create_reserve(heap_allocator, init_cap);
-    if (p.err.kind != P_ERR_NONE) {
-        output = parser_append_error_msg(output, &p);
-    } else {
-        output = cy_string_append_c(output, "programa compilado com sucesso");
-
-#ifdef CY_DEBUG
-        CyTicks elapsed = cy_ticks_elapsed(start, cy_ticks_query());
-        f64 elapsed_us = cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS);
-        output = cy_string_append_fmt(output, " em %.01fμs", elapsed_us);
-#endif
+    Ast ast = parse(temp_allocator, &parser);
+    if (parser.err.kind != P_ERR_NONE) {
+        msg = parser_append_error_msg(msg, &parser);
+        goto cleanup;
     }
 
+    CheckerStatus status = check(&ast);
+    if (status.err != C_ERR_NONE) {
+        msg = checker_append_error_msg(msg, &status);
+        goto cleanup;
+    }
+
+#if 0
+    code = generate_il(temp_allocator, &ast);
+#endif
+
+    msg = cy_string_append_c(msg, "programa compilado com sucesso");
+
+#ifdef CY_DEBUG
+    CyTicks elapsed = cy_ticks_elapsed(start, cy_ticks_query());
+    f64 elapsed_us = cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS);
+    msg = cy_string_append_fmt(msg, " em %.01fμs", elapsed_us);
+#endif
+
+cleanup:
     cy_stack_deinit(&parser_stack);
     cy_arena_deinit(&tokenizer_arena);
 
-    return cy_string_shrink(output);
+    cy_string_shrink(msg);
+
+    return (CompilerOutput){
+        .code = code,
+        .msg = msg,
+    };
 }
