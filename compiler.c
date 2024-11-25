@@ -1403,40 +1403,6 @@ static inline AstFloat parse_float(const Token *tok)
     };
 }
 
-// TODO(cya): move this to the code generator section
-#if 0
-static inline CyString parse_string(CyAllocator a, const Token *tok)
-{
-    CY_ASSERT(tok->kind == C_TOKEN_STRING);
-
-    CyString str = cy_string_create_view(a, tok->str);
-
-#ifdef CY_OS_WINDOWS
-    // TODO(cya): convert from UTF-8 to ANSI Windows codepage (CP_ACP)
-    isize utf16_len = MultiByteToWideChar(
-        CP_UTF8, 0, str, cy_string_len(str), NULL, 0
-    );
-    wchar_t *utf16 = cy_alloc(a, (utf16_len + 1) * sizeof(*utf16));
-    MultiByteToWideChar(CP_UTF8, 0, str, cy_string_len(str), utf16, utf16_len);
-
-    isize ansi_len = WideCharToMultiByte(
-        CP_OEMCP, 0, utf16, utf16_len, NULL, 0, NULL, NULL
-    );
-    CyString ansi = cy_string_create_reserve(a, ansi_len + 1);
-    WideCharToMultiByte(
-        CP_OEMCP, 0, utf16, utf16_len, ansi, ansi_len, NULL, NULL
-    );
-    cy__string_set_len(ansi, ansi_len);
-
-    cy_string_free(str);
-    cy_free(a, utf16);
-    str = ansi;
-#endif
-
-    return str;
-}
-#endif
-
 static inline void ast_node_read_token(AstNode *node, Token *tok)
 {
     if (node == NULL) {
@@ -2747,6 +2713,8 @@ static void il_generator_append_line(IlGenerator *g, const char *fmt, ...)
     g->code = cy_string_append_fmt(g->code, "\t\t%s\r\n", buf);
 }
 
+static inline void il_generator_append_ldstr(IlGenerator *g, String s);
+
 static inline void il_generator_append_expr(IlGenerator *g, AstNode *expr)
 {
     AstKind expr_kind = expr->kind;
@@ -2798,7 +2766,8 @@ static inline void il_generator_append_expr(IlGenerator *g, AstNode *expr)
 
         Token op = expr->u.UNARY_EXPR.op;
         if (op.kind == C_TOKEN_NOT) {
-            il_generator_append_line(g, "not");
+            il_generator_append_line(g, "ldc.i4 1");
+            il_generator_append_line(g, "xor");
         } else if (op.kind == C_TOKEN_SUB) {
             il_generator_append_line(g, "ldc.r8 -1.0");
             il_generator_append_line(g, "mul");
@@ -2818,7 +2787,7 @@ static inline void il_generator_append_expr(IlGenerator *g, AstNode *expr)
         AstEntityKind kind = expr->u.LITERAL.val.kind;
         if (kind== AST_ENT_STRING) {
             String s = expr->u.LITERAL.val.u.s;
-            il_generator_append_line(g, "ldstr %.*s", STRING_ARG(s));
+            il_generator_append_ldstr(g, s);
         } else {
             char buf[0x100] = {0};
             isize buf_size = sizeof(buf);
@@ -2894,6 +2863,39 @@ static inline const char *il_class_from_entity_kind(AstEntityKind kind)
     return keyword;
 }
 
+static inline void il_generator_append_ldstr(IlGenerator *g, String s)
+{
+    CyAllocator a = g->alloc;
+    CyString str = cy_string_create_view(a, s);
+
+#ifdef CY_OS_WINDOWS
+    isize utf16_len = MultiByteToWideChar(
+        CP_UTF8, 0, str, cy_string_len(str), NULL, 0
+    );
+    CyString16 utf16 = cy_string_16_create_reserve(a, utf16_len);
+    MultiByteToWideChar(CP_UTF8, 0, str, cy_string_len(str), utf16, utf16_len);
+
+    UINT cp = GetConsoleOutputCP();
+    const char *def_char = IS_IN_RANGE_IN(cp, CP_UTF7, CP_UTF8) ? NULL : "?";
+
+    isize ansi_len = WideCharToMultiByte(
+        cp, 0, utf16, utf16_len, NULL, 0, def_char, NULL
+    );
+    CyString ansi = cy_string_create_reserve(a, ansi_len);
+    WideCharToMultiByte(
+        cp, 0, utf16, utf16_len, ansi, ansi_len, def_char, NULL
+    );
+    cy__string_set_len(ansi, ansi_len);
+
+    cy_string_free(str);
+    cy_string_16_free(utf16);
+    str = ansi;
+#endif
+
+    il_generator_append_line(g, "ldstr %s", str);
+    cy_string_free(str);
+}
+
 static inline void il_generator_append_label(IlGenerator *g, isize label)
 {
     g->code = cy_string_append_fmt(g->code, "IL_%02td:\r\n", label);
@@ -2939,8 +2941,8 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
         for (isize i = 0; i < args->len; i++) {
             AstNode *arg = args->data[i];
             if (arg->u.INPUT_ARG.prompt != NULL) {
-                String prompt = arg->u.INPUT_ARG.prompt->u.INPUT_PROMPT.string.str;
-                il_generator_append_line(g, "ldstr %.*s", STRING_ARG(prompt));
+                String s = arg->u.INPUT_ARG.prompt->u.INPUT_PROMPT.string.str;
+                il_generator_append_ldstr(g, s);
                 il_generator_append_line(
                     g, "call void [mscorlib]System.Console::Write(string)"
                 );
@@ -2988,22 +2990,22 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
     } break;
     case AST_KIND_IF_STMT: {
         b32 is_root = stmt->u.IF_STMT.is_root;
-            
+
         isize if_label = ++g->cur_label;
         isize end_label = is_root ? label_stack_push(g) : label_stack_peek(g);
-            
+
         AstNode *else_stmt = stmt->u.IF_STMT.else_stmt;
         isize else_label = else_stmt == NULL ? end_label : ++g->cur_label;
-            
-        AstNode *expr = stmt->u.IF_STMT.cond;
-        if (expr != NULL) {
-            il_generator_append_expr(g, expr);
+
+        AstNode *cond = stmt->u.IF_STMT.cond;
+        if (cond != NULL) {
+            il_generator_append_expr(g, cond);
             il_generator_append_line(g, "brtrue IL_%02td", if_label);
             il_generator_append_line(g, "br IL_%02td", else_label);
-                
+
             il_generator_append_label(g, if_label);
         }
-            
+
         AstList *stmts = &stmt->u.IF_STMT.body->u.STMT_LIST.list;
         for (isize i = 0; i < stmts->len; i++) {
             il_generator_append_stmt(g, stmts->data[i]);
@@ -3022,6 +3024,20 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
         }
     } break;
     case AST_KIND_REPEAT_STMT: {
+        isize label = ++g->cur_label;
+        il_generator_append_label(g, label);
+
+        AstList *stmts = &stmt->u.REPEAT_STMT.body->u.STMT_LIST.list;
+        for (isize i = 0; i < stmts->len; i++) {
+            il_generator_append_stmt(g, stmts->data[i]);
+        }
+
+        AstNode *expr = stmt->u.REPEAT_STMT.expr;
+        il_generator_append_expr(g, expr);
+
+        const char *instr = stmt->u.REPEAT_STMT.keyword.kind == C_TOKEN_WHILE ?
+            "true" : "false";
+        il_generator_append_line(g, "br%s IL_%02td", instr, label);
     } break;
     default: break;
     }

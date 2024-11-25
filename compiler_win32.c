@@ -1263,54 +1263,6 @@ LRESULT CALLBACK Win32WindowCallback(
             cy_string_free(src_code);
         } break;
         case BUTTON_DISPLAY_GROUP: {
-            if (g_bufs.members == NULL) {
-                HANDLE file = CreateFileW(
-                    L"integrantes.txt",
-                    GENERIC_READ, FILE_SHARE_READ,
-                    NULL,
-                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-                    NULL
-                );
-
-                const char prefix[] = "Integrantes:\r\n";
-                isize prefix_len = CY_STATIC_STR_LEN(prefix);
-                const char err_suffix[] = "(integrantes.txt não encontrado)";
-                isize err_suffix_len = 4 + CY_STATIC_STR_LEN(err_suffix);
-                isize members_cap = prefix_len + err_suffix_len;
-
-                LARGE_INTEGER file_size = {0};
-                if (g_state.file != INVALID_HANDLE_VALUE) {
-                    GetFileSizeEx(file, &file_size);
-                    members_cap = prefix_len + file_size.QuadPart;
-                }
-
-                CyString members = cy_string_create_reserve(
-                    cy_heap_allocator(), members_cap
-                );
-                if (members == NULL) {
-                    Win32ErrorDialog(L"Erro ao alocar memória temporária");
-                    break;
-                }
-
-                members = cy_string_append_c(members, prefix);
-                if (file != INVALID_HANDLE_VALUE) {
-                    isize bytes_read = 0;
-                    ReadFile(
-                        file, members + prefix_len, members_cap - prefix_len,
-                        (LPDWORD)&bytes_read, NULL
-                    );
-                    ASSERT(bytes_read == (isize)file_size.QuadPart);
-                    CloseHandle(file);
-                } else {
-                    members = cy_string_append_fmt(members, "\t%s", err_suffix);
-                }
-
-                cy__string_set_len(members, cy_str_len(members));
-                CyString16 members_utf16 = Win32UTF8toUTF16(members);
-                g_bufs.members = members_utf16;
-                cy_string_free(members);
-            }
-
             Win32SetLogAreaText(g_bufs.members);
         } break;
         default : {
@@ -1387,6 +1339,51 @@ int WINAPI wWinMain(
     if (window == NULL) {
         Win32FatalErrorDialog(L"Erro ao criar janela");
     }
+
+    HANDLE file = CreateFileW(
+        L"integrantes.txt",
+        GENERIC_READ, FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    const char prefix[] = "Integrantes:\r\n";
+    isize prefix_len = CY_STATIC_STR_LEN(prefix);
+    const char err_suffix[] = "(integrantes.txt não encontrado)";
+    isize err_suffix_len = 4 + CY_STATIC_STR_LEN(err_suffix);
+    isize members_cap = prefix_len + err_suffix_len;
+
+    LARGE_INTEGER file_size = {0};
+    if (g_state.file != INVALID_HANDLE_VALUE) {
+        GetFileSizeEx(file, &file_size);
+        members_cap = prefix_len + file_size.QuadPart;
+    }
+
+    CyString members = cy_string_create_reserve(
+        cy_heap_allocator(), members_cap
+    );
+    if (members == NULL) {
+        Win32ErrorDialog(L"Erro ao alocar memória temporária");
+    }
+
+    members = cy_string_append_c(members, prefix);
+    if (file != INVALID_HANDLE_VALUE) {
+        isize bytes_read = 0;
+        ReadFile(
+            file, members + prefix_len, members_cap - prefix_len,
+            (LPDWORD)&bytes_read, NULL
+        );
+        ASSERT(bytes_read == (isize)file_size.QuadPart);
+        CloseHandle(file);
+    } else {
+        members = cy_string_append_fmt(members, "\t%s", err_suffix);
+    }
+
+    cy__string_set_len(members, cy_str_len(members));
+    CyString16 members_utf16 = Win32UTF8toUTF16(members);
+    g_bufs.members = members_utf16;
+    cy_string_free(members);
 
     // TODO(cya): add accelerator for 'compile to exe' button (CTRL+F7)
     ACCEL accels[BUTTON_COUNT] = {
