@@ -3,6 +3,8 @@
 
 typedef CyStringView String;
 
+#define STRING_ARG(s) (int)s.len, s.text
+
 /* ---------------------------- Tokenizer ----------------------------------- */
 #define TOKEN_KINDS \
     TOKEN_KIND(C_TOKEN_INVALID, "símbolo inválido"), \
@@ -705,9 +707,7 @@ static CyString tokenizer_append_error_msg(CyString msg, const Tokenizer *t)
 
     TokenizerError err = t->err;
     if (err != T_ERR_INVALID_STRING && err != T_ERR_INVALID_COMMENT) {
-        msg = cy_string_append_fmt(
-            msg, "%.*s ", (int)t->bad_tok.str.len, t->bad_tok.str.text
-        );
+        msg = cy_string_append_fmt(msg, "%.*s ", STRING_ARG(t->bad_tok.str));
     }
 
     const char *desc = NULL;
@@ -1022,18 +1022,23 @@ static GrammarRule g_ll1_table[LL1_ROW_COUNT][LL1_COL_COUNT] = {
     },
 };
 
+typedef struct {
+    f64 val;
+    isize precision;
+} AstFloat;
+
 typedef enum {
-    AST_LIT_INT,
-    AST_LIT_FLOAT,
-    AST_LIT_STRING,
-    AST_LIT_BOOL,
-} AstLiteralKind;
+    AST_ENT_INT,
+    AST_ENT_FLOAT,
+    AST_ENT_STRING,
+    AST_ENT_BOOL,
+} AstEntityKind;
 
 typedef struct {
-    AstLiteralKind kind;
+    AstEntityKind kind;
     union {
         isize i;
-        f64 f;
+        AstFloat f;
         String s;
         b32 b;
     } u;
@@ -1042,6 +1047,7 @@ typedef struct {
 #define AST_KINDS \
     AST_KIND(IDENT, struct { \
         Token tok; \
+        AstEntityKind kind; \
     }) \
     AST_KIND(LITERAL, struct { \
         Token tok; \
@@ -1066,7 +1072,7 @@ AST_KIND(_LIST_BEGIN, isize) \
     }) \
     AST_KIND(INPUT_ARG, struct { \
         AstNode *prompt; \
-        Token ident; \
+        AstNode *ident; \
     }) \
     AST_KIND(INPUT_PROMPT, struct { \
         Token string; \
@@ -1251,6 +1257,81 @@ static inline void ast_expr_insert_node(AstNode *expr, AstNode *node)
     }
 }
 
+static inline AstEntityKind ast_entity_kind_from_ident(Token *ident_tok)
+{
+    String ident = ident_tok->str;
+    AstEntityKind kind = -1;
+    if (cy_string_view_has_prefix(ident, "i_")) {
+        kind = AST_ENT_INT;
+    } else if (cy_string_view_has_prefix(ident, "f_")) {
+        kind = AST_ENT_FLOAT;
+    } else if (cy_string_view_has_prefix(ident, "b_")) {
+        kind = AST_ENT_BOOL;
+    } else {
+        kind = AST_ENT_STRING;
+    }
+
+    return kind;
+}
+
+static inline AstEntityKind ast_expr_determine_kind(AstNode *expr)
+{
+    AstEntityKind kind = -1;
+    AstKind expr_kind = expr->kind;
+    switch (expr_kind) {
+    case AST_KIND_BINARY_EXPR: {
+        AstEntityKind lhs = ast_expr_determine_kind(expr->u.BINARY_EXPR.left);
+        AstEntityKind rhs = ast_expr_determine_kind(expr->u.BINARY_EXPR.right);
+
+        Token op = expr->u.BINARY_EXPR.op;
+        switch (op.kind) {
+        case C_TOKEN_ADD:
+        case C_TOKEN_SUB:
+        case C_TOKEN_MUL: {
+            if (lhs == AST_ENT_INT && rhs == AST_ENT_INT) {
+                kind = AST_ENT_INT;
+            } else {
+                kind = AST_ENT_FLOAT;
+            }
+        } break;
+        case C_TOKEN_DIV: {
+            kind = AST_ENT_FLOAT;
+        } break;
+        case C_TOKEN_CMP_EQ:
+        case C_TOKEN_CMP_NE:
+        case C_TOKEN_CMP_GT:
+        case C_TOKEN_CMP_LT: {
+            kind = lhs;
+        } break;
+        case C_TOKEN_AND:
+        case C_TOKEN_OR: {
+            kind = AST_ENT_BOOL;
+        } break;
+        default: break;
+        }
+    } break;
+    case AST_KIND_UNARY_EXPR: {
+        if (expr->u.UNARY_EXPR.op.kind == C_TOKEN_NOT) {
+            kind = AST_ENT_BOOL;
+        } else {
+            kind = ast_expr_determine_kind(expr->u.UNARY_EXPR.expr);
+        }
+    } break;
+    case AST_KIND_PAREN_EXPR: {
+        kind = ast_expr_determine_kind(expr->u.PAREN_EXPR.expr);
+    } break;
+    case AST_KIND_IDENT: {
+        kind = ast_entity_kind_from_ident(&expr->u.IDENT.tok);
+    } break;
+    case AST_KIND_LITERAL: {
+        kind = expr->u.LITERAL.val.kind;
+    } break;
+    default: break;
+    }
+
+    return kind;
+}
+
 static inline void ast_binary_expr_reduce(CyAllocator a, AstNode *expr)
 {
     CY_ASSERT(expr->kind == AST_KIND_BINARY_EXPR);
@@ -1259,6 +1340,10 @@ static inline void ast_binary_expr_reduce(CyAllocator a, AstNode *expr)
     CY_ASSERT(e->right == NULL);
 
     AstNode *child = e->left;
+    // if (child->kind == AST_KIND_BINARY_EXPR) {
+    //     child->u.BINARY_EXPR.op = e->op;
+    // }
+
     cy_mem_copy(expr, child, sizeof(*expr));
     cy_free(a, child);
 }
@@ -1276,7 +1361,17 @@ static inline isize parse_int(const Token *tok)
     return res;
 }
 
-static inline f64 parse_float(const Token *tok)
+static inline f64 pow(f64 n, f64 exp)
+{
+    f64 mul = n;
+    while (--exp) {
+        n *= mul;
+    }
+
+    return n;
+ }
+
+static inline AstFloat parse_float(const Token *tok)
 {
     CY_ASSERT(tok->kind == C_TOKEN_FLOAT);
 
@@ -1295,10 +1390,6 @@ static inline f64 parse_float(const Token *tok)
     f64 div = 10.0;
     start = end + 1;
     end = tok->str.text + tok->str.len;
-    while (*start == '0') {
-        div *= 10.0;
-        start += 1;
-    }
 
     len = end - start;
     f64 decimal_part = (f64)parse_int(&(Token){
@@ -1306,7 +1397,10 @@ static inline f64 parse_float(const Token *tok)
         .str = cy_string_view_create_len((const char*)start, len),
     });
 
-    return whole_part + decimal_part / div;
+    return (AstFloat){
+        .val = whole_part + decimal_part / pow(div, len),
+        .precision = len,
+    };
 }
 
 // TODO(cya): move this to the code generator section
@@ -1357,6 +1451,7 @@ static inline void ast_node_read_token(AstNode *node, Token *tok)
         }
 
         AstNode *ident_node = ast_list_get_last_node(&node->u.IDENT_LIST.list);
+        ident_node->u.IDENT.kind = ast_entity_kind_from_ident(tok);
         dest = &ident_node->u.IDENT.tok;
     } break;
     case AST_KIND_INPUT_LIST: {
@@ -1365,7 +1460,9 @@ static inline void ast_node_read_token(AstNode *node, Token *tok)
         }
 
         AstNode *arg_node = ast_list_get_last_node(&node->u.INPUT_LIST.list);
-        dest = &arg_node->u.INPUT_ARG.ident;
+        arg_node->u.INPUT_ARG.ident->u.IDENT.kind =
+            ast_entity_kind_from_ident(tok);
+        dest = &arg_node->u.INPUT_ARG.ident->u.IDENT.tok;
     } break;
     case AST_KIND_INPUT_PROMPT: {
         if (tok->kind != C_TOKEN_STRING) {
@@ -1391,18 +1488,23 @@ static inline void ast_node_read_token(AstNode *node, Token *tok)
     case AST_KIND_LITERAL: {
         switch (tok->kind) {
         case C_TOKEN_INTEGER: {
+            node->u.LITERAL.val.kind = AST_ENT_INT;
             node->u.LITERAL.val.u.i = parse_int(tok);
         } break;
         case C_TOKEN_FLOAT: {
+            node->u.LITERAL.val.kind = AST_ENT_FLOAT;
             node->u.LITERAL.val.u.f = parse_float(tok);
         } break;
         case C_TOKEN_STRING: {
+            node->u.LITERAL.val.kind = AST_ENT_STRING;
             node->u.LITERAL.val.u.s = tok->str;
         } break;
         case C_TOKEN_TRUE: {
+            node->u.LITERAL.val.kind = AST_ENT_BOOL;
             node->u.LITERAL.val.u.b = true;
         } break;
         case C_TOKEN_FALSE: {
+            node->u.LITERAL.val.kind = AST_ENT_BOOL;
             node->u.LITERAL.val.u.b = false;
         } break;
         default: return;
@@ -1415,13 +1517,11 @@ static inline void ast_node_read_token(AstNode *node, Token *tok)
             return;
         }
 
+        node->u.IDENT.kind = ast_entity_kind_from_ident(tok);
         dest = &node->u.IDENT.tok;
     } break;
     case AST_KIND_UNARY_EXPR: {
         dest = &node->u.UNARY_EXPR.op;
-    } break;
-    case AST_KIND_BINARY_EXPR: {
-        dest = &node->u.BINARY_EXPR.op;
     } break;
     default: return;
     }
@@ -1571,7 +1671,7 @@ static CyString reachable_terminals(CyAllocator a, NonTerminal n)
 
         TokenKind kind = g_ll1_kind_from_col[i];
         String s = g_token_strings[kind];
-        str = cy_string_append_fmt(str, "%.*s ", s.len, s.text);
+        str = cy_string_append_fmt(str, "%.*s ", STRING_ARG(s));
     }
 
     int len = cy_string_len(str);
@@ -1622,7 +1722,7 @@ static CyString parser_append_error_msg(CyString msg, Parser *p)
 
     msg = cy_string_append_fmt(
         msg, "encontrado %.*s esperado %s",
-        found_str.len, found_str.text,
+        STRING_ARG(found_str),
         expected_str
     );
     cy_string_free(expected_str);
@@ -1895,6 +1995,8 @@ static Ast parse(CyAllocator a, Parser *p)
             CY_ASSERT(p->cur_node->kind == AST_KIND_INPUT_LIST);
 
             new_node = AST_NODE_ALLOC(a, INPUT_ARG);
+            new_node->u.INPUT_ARG.ident = AST_NODE_ALLOC(a, IDENT);
+
             AstList *l = &p->cur_node->u.INPUT_LIST.list;
             ast_list_append_node(l, new_node);
         } break;
@@ -1974,21 +2076,41 @@ static Ast parse(CyAllocator a, Parser *p)
             p->cur_node->u.IF_STMT.is_root = true;
         } break;
         case GR_34: { // <elif> ::= elif <expr> <lista_cmd> <elif>
-            parser_stack_push_non_terminal(p, NT_ELIF, NULL);
-            parser_stack_push_non_terminal(p, NT_CMD_LIST, NULL);
-            parser_stack_push_non_terminal(p, NT_EXPR, NULL);
-            parser_stack_push_token(p, C_TOKEN_ELIF, NULL);
+            new_node = AST_NODE_ALLOC(a, IF_STMT);
+
+            parser_stack_push_non_terminal(p, NT_ELIF, new_node);
+            parser_stack_push_non_terminal(p, NT_CMD_LIST, new_node);
+            parser_stack_push_non_terminal(p, NT_EXPR, new_node);
+            parser_stack_push_token(p, C_TOKEN_ELIF, new_node);
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
+
+            AstNode *else_stmt = p->cur_node->u.IF_STMT.else_stmt;
+            while (else_stmt != NULL) {
+                p->cur_node = else_stmt;
+                else_stmt = p->cur_node->u.IF_STMT.else_stmt;
+            }
+
+            p->cur_node->u.IF_STMT.else_stmt = new_node;
         } break;
         case GR_35: { // <elif> ::= î
             CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
         } break;
         case GR_36: { // <else> ::= else <lista_cmd>
-            parser_stack_push_non_terminal(p, NT_CMD_LIST, NULL);
-            parser_stack_push_token(p, C_TOKEN_ELSE, NULL);
+            new_node = AST_NODE_ALLOC(a, IF_STMT);
+
+            parser_stack_push_non_terminal(p, NT_CMD_LIST, new_node);
+            parser_stack_push_token(p, C_TOKEN_ELSE, new_node);
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
+
+            AstNode *else_stmt = p->cur_node->u.IF_STMT.else_stmt;
+            while (else_stmt != NULL) {
+                p->cur_node = else_stmt;
+                else_stmt = p->cur_node->u.IF_STMT.else_stmt;
+            }
+
+            p->cur_node->u.IF_STMT.else_stmt = new_node;
         } break;
         case GR_37: { // <else> ::= î
             CY_ASSERT(p->cur_node->kind == AST_KIND_IF_STMT);
@@ -2156,21 +2278,25 @@ static Ast parse(CyAllocator a, Parser *p)
         case GR_55: { // <operador_relacional> ::= "=="
             parser_stack_push_token(p, C_TOKEN_CMP_EQ, NULL);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_56: { // <operador_relacional> ::= "!="
             parser_stack_push_token(p, C_TOKEN_CMP_NE, NULL);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_57: { // <operador_relacional> ::= "<"
             parser_stack_push_token(p, C_TOKEN_CMP_LT, NULL);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_58: { // <operador_relacional> ::= ">"
             parser_stack_push_token(p, C_TOKEN_CMP_GT, NULL);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
         } break;
         case GR_59: { // <aritmetica> ::= <termo> <aritmetica_mul>
@@ -2192,6 +2318,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_61: { // <aritmetica_mul> ::= "-" <termo> <aritmetica_mul>
@@ -2203,6 +2330,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_62: { // <aritmetica_mul> ::= î
@@ -2229,6 +2357,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_65: { // <termo_mul> ::= "/" <fator> <termo_mul>
@@ -2240,6 +2369,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_66: { // <termo_mul> ::= î
@@ -2424,7 +2554,7 @@ static CheckerStatus check_stmt(AstNode *node, AstList *decl_idents)
     case AST_KIND_READ_STMT: {
         AstList *inputs = &node->u.READ_STMT.input_list->u.INPUT_LIST.list;
         for (isize i = 0; i < inputs->len; i++) {
-            Token *tok = &inputs->data[i]->u.INPUT_ARG.ident;
+            Token *tok = &inputs->data[i]->u.INPUT_ARG.ident->u.IDENT.tok;
             if (!is_declared(decl_idents, tok)) {
                 return checker_error(C_ERR_UNDECLARED_IDENT, tok);
             }
@@ -2507,7 +2637,7 @@ static CheckerStatus check(Ast *a)
 static inline CyString checker_append_error_msg(CyString msg, CheckerStatus *s)
 {
     msg = append_error_prefix(msg, s->tok.pos);
-    msg = cy_string_append_fmt(msg, "%.*s ", s->tok.str.len, s->tok.str.text);
+    msg = cy_string_append_fmt(msg, "%.*s ", STRING_ARG(s->tok.str));
 
     switch (s->err) {
     case C_ERR_UNDECLARED_IDENT: {
@@ -2526,41 +2656,437 @@ static inline CyString checker_append_error_msg(CyString msg, CheckerStatus *s)
 }
 
 /* ------------------------- Code Generator (MSIL) -------------------------- */
-#if 0
-static CyString generate_il(CyAllocator a, Ast *ast)
+typedef struct {
+    CyAllocator alloc;
+    isize *items;
+    isize len;
+    isize cap;
+} LabelStack;
+
+typedef struct {
+    CyAllocator alloc;
+    Ast *ast;
+    CyString code;
+    LabelStack labels;
+} IlGenerator;
+
+static inline isize *label_stack_peek(IlGenerator *g)
 {
-    AstList *stmts = &ast->root->u.MAIN.body->u.STMT_LIST.list;
-    isize init_cap = 10 * stmts->len;
-    CyString code = cy_string_create_reserve(a, init_cap);
-    for (isize i = 0; i < stmts->len; i++) {
-        AstNode *stmt = stmts->data[i];
-        code = insert_line();
+    CY_VALIDATE_PTR(g);
+    return (g->labels.len > 0) ? &g->labels.items[g->labels.len - 1] : NULL;
+}
+
+static inline b32 label_stack_is_empty(IlGenerator *g)
+{
+    return g->labels.len < 1;
+}
+
+static inline isize label_stack_push(IlGenerator *g)
+{
+    if (g->labels.len == g->labels.cap) {
+        isize old_size = g->labels.cap * sizeof(*g->labels.items);
+        isize new_size = old_size * 2;
+        isize *items = cy_resize(
+            g->labels.alloc, g->labels.items,
+            old_size, new_size
+        );
+        if (items == NULL) {
+            // TODO(cya): error out here? (FIXME)
+            // _error(g, P_ERR_OUT_OF_MEMORY);
+            return -1;
+        }
+
+        g->labels.items = items;
+        g->labels.cap *= 2;
     }
 
-    return NULL;
+     isize item = label_stack_is_empty(g) ? 1 : *label_stack_peek(g) + 1;
+     g->labels.items[g->labels.len++] = item;
+     return item;
 }
-#endif
+
+static inline isize label_stack_pop(IlGenerator *g)
+{
+    if (g->labels.len <= 0) {
+        return -1;
+    }
+
+    isize *top = &g->labels.items[--g->labels.len];
+    isize ret = *top;
+
+    cy_mem_set(top, 0, sizeof(*top));
+    return ret;
+}
+
+static inline IlGenerator il_generator_init(
+    CyAllocator a, CyAllocator stack_allocator, Ast *ast
+) {
+    isize cap = 0x10;
+    isize *items = cy_alloc(stack_allocator, cap);
+    return (IlGenerator){
+        .alloc = a,
+        .ast = ast,
+        .labels = (LabelStack){
+            .alloc = stack_allocator,
+            .items = items,
+            .cap = cap,
+        },
+    };
+}
+
+static void il_generator_append_line(IlGenerator *g, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+
+    char buf[0x1000] = {0};
+    vsnprintf(buf, sizeof(buf), fmt, va);
+
+    va_end(va);
+
+    g->code = cy_string_append_fmt(g->code, "\t\t%s\r\n", buf);
+}
+
+static inline void il_generator_append_expr(IlGenerator *g, AstNode *expr)
+{
+    AstKind expr_kind = expr->kind;
+    switch (expr_kind) {
+    case AST_KIND_BINARY_EXPR: {
+        il_generator_append_expr(g, expr->u.BINARY_EXPR.left);
+        il_generator_append_expr(g, expr->u.BINARY_EXPR.right);
+
+        const char *instr = NULL;
+        Token op = expr->u.BINARY_EXPR.op;
+        switch (op.kind) {
+        case C_TOKEN_ADD: {
+            instr = "add";
+        } break;
+        case C_TOKEN_SUB: {
+            instr = "sub";
+        } break;
+        case C_TOKEN_MUL: {
+            instr = "mul";
+        } break;
+        case C_TOKEN_DIV: {
+            instr = "div";
+        } break;
+        case C_TOKEN_CMP_EQ: {
+            instr = "ceq";
+        } break;
+        case C_TOKEN_CMP_NE: {
+            instr = "cne";
+        } break;
+        case C_TOKEN_CMP_GT: {
+            instr = "cgt";
+        } break;
+        case C_TOKEN_CMP_LT: {
+            instr = "clt";
+        } break;
+        case C_TOKEN_AND: {
+            instr = "and";
+        } break;
+        case C_TOKEN_OR: {
+            instr = "or";
+        } break;
+        default: break;
+        }
+
+        il_generator_append_line(g, instr);
+    } break;
+    case AST_KIND_UNARY_EXPR: {
+        il_generator_append_expr(g, expr->u.UNARY_EXPR.expr);
+
+        Token op = expr->u.UNARY_EXPR.op;
+        if (op.kind == C_TOKEN_NOT) {
+            il_generator_append_line(g, "not");
+        } else if (op.kind == C_TOKEN_SUB) {
+            il_generator_append_line(g, "ldc.r8 -1.0");
+            il_generator_append_line(g, "mul");
+        }
+    } break;
+    case AST_KIND_PAREN_EXPR: {
+        il_generator_append_expr(g, expr->u.PAREN_EXPR.expr);
+    } break;
+    case AST_KIND_IDENT: {
+        String name = expr->u.IDENT.tok.str;
+        il_generator_append_line(g, "ldloc %.*s", STRING_ARG(name));
+        if (expr->u.IDENT.kind == AST_ENT_INT) {
+            il_generator_append_line(g, "conv.r8");
+        }
+    } break;
+    case AST_KIND_LITERAL: {
+        AstEntityKind kind = expr->u.LITERAL.val.kind;
+        if (kind== AST_ENT_STRING) {
+            String s = expr->u.LITERAL.val.u.s;
+            il_generator_append_line(g, "ldstr %.*s", STRING_ARG(s));
+        } else {
+            char buf[0x100] = {0};
+            isize buf_size = sizeof(buf);
+            const char *kind_id = NULL;
+            switch (kind) {
+            case AST_ENT_INT: {
+                kind_id = "i8";
+                isize val = expr->u.LITERAL.val.u.i;
+                snprintf(buf, buf_size, "%td", val);
+            } break;
+            case AST_ENT_FLOAT: {
+                kind_id = "r8";
+                f64 val = expr->u.LITERAL.val.u.f.val;
+                isize precision = expr->u.LITERAL.val.u.f.precision;
+                snprintf(buf, buf_size, "%.*lf", (int)precision, val);
+            } break;
+            case AST_ENT_BOOL: {
+                kind_id = "i4";
+                b32 val = expr->u.LITERAL.val.u.b;
+                snprintf(buf, buf_size, "%d", val);
+            } break;
+            default: break;
+            }
+
+            il_generator_append_line(g, "ldc.%s %s", kind_id, buf);
+            if (kind == AST_ENT_INT) {
+                il_generator_append_line(g, "conv.r8");
+            }
+        }
+    } break;
+    default: break;
+    }
+}
+
+static inline const char *il_keyword_from_entity_kind(AstEntityKind kind)
+{
+    const char *keyword = NULL;
+    switch (kind) {
+    case AST_ENT_INT: {
+        keyword = "int64";
+    } break;
+    case AST_ENT_FLOAT: {
+        keyword = "float64";
+    } break;
+    case AST_ENT_BOOL: {
+        keyword = "bool";
+    } break;
+    case AST_ENT_STRING: {
+        keyword = "string";
+    } break;
+    }
+
+    return keyword;
+}
+static inline const char *il_class_from_entity_kind(AstEntityKind kind)
+{
+    const char *keyword = NULL;
+    switch (kind) {
+    case AST_ENT_INT: {
+        keyword = "Int64";
+    } break;
+    case AST_ENT_FLOAT: {
+        keyword = "Double";
+    } break;
+    case AST_ENT_BOOL: {
+        keyword = "Bool";
+    } break;
+    case AST_ENT_STRING: {
+        keyword = "string";
+    } break;
+    }
+
+    return keyword;
+}
+
+static inline void il_generator_append_label(IlGenerator *g)
+{
+    isize label = label_stack_pop(g);
+    g->code = cy_string_append_fmt(g->code, "IL_%02td:\r\n", label);
+}
+
+static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
+{
+    switch (stmt->kind) {
+    case AST_KIND_VAR_DECL: {
+        AstList *idents = &stmt->u.VAR_DECL.ident_list->u.IDENT_LIST.list;
+        for (isize i = 0; i < idents->len; i++) {
+            AstNode *ident = idents->data[i];
+            const char *kind = il_keyword_from_entity_kind(ident->u.IDENT.kind);
+
+            String name = ident->u.IDENT.tok.str;
+            il_generator_append_line(
+                g, ".locals (%s %.*s)", kind, STRING_ARG(name)
+            );
+        }
+    } break;
+    case AST_KIND_ASSIGN_STMT: {
+        AstNode *expr = stmt->u.ASSIGN_STMT.expr;
+        // TODO(cya): determine if we're even gonna need this in the first place
+        AstEntityKind expr_kind = ast_expr_determine_kind(expr);
+        il_generator_append_expr(g, expr);
+        if (expr_kind == AST_ENT_INT) {
+            il_generator_append_line(g, "conv.i8");
+        }
+
+        AstList *idents = &stmt->u.ASSIGN_STMT.ident_list->u.IDENT_LIST.list;
+        for (isize i = 0; i < idents->len - 1; i++) {
+            il_generator_append_line(g, "dup");
+        }
+
+        for (isize i = 0; i < idents->len; i++) {
+            AstNode *ident = idents->data[i];
+            String name = ident->u.IDENT.tok.str;
+            il_generator_append_line(g, "stloc %.*s", STRING_ARG(name));
+        }
+    } break;
+    case AST_KIND_READ_STMT: {
+        AstList *args = &stmt->u.READ_STMT.input_list->u.INPUT_LIST.list;
+        for (isize i = 0; i < args->len; i++) {
+            AstNode *arg = args->data[i];
+            String prompt = arg->u.INPUT_ARG.prompt->u.INPUT_PROMPT.string.str;
+            il_generator_append_line(g, "ldstr %.*s", STRING_ARG(prompt));
+            il_generator_append_line(
+                g, "call void [mscorlib]System.Console::Write(string)"
+            );
+
+            String ident = arg->u.INPUT_ARG.ident->u.IDENT.tok.str;
+            AstEntityKind kind = arg->u.INPUT_ARG.ident->u.IDENT.kind;
+            il_generator_append_line(
+                g, "call string [mscorlib]System.Console::ReadLine()"
+            );
+            if (kind != AST_ENT_STRING) {
+                const char *keyword = il_keyword_from_entity_kind(kind);
+                const char *class = il_class_from_entity_kind(kind);
+                il_generator_append_line(
+                    g, "call %s [mscorlib]System.%s::Parse(string)",
+                    keyword, class
+                );
+            }
+
+            il_generator_append_line(g, "stloc %.*s", STRING_ARG(ident));
+        }
+    } break;
+    case AST_KIND_WRITE_STMT: {
+        AstList *exprs = &stmt->u.WRITE_STMT.expr_list->u.EXPR_LIST.list;
+        for (isize i = 0; i < exprs->len; i++) {
+            AstNode *expr = exprs->data[i];
+            AstEntityKind expr_kind = ast_expr_determine_kind(expr);
+            il_generator_append_expr(g, expr);
+
+            const char *kind = il_keyword_from_entity_kind(expr_kind);
+            if (expr_kind == AST_ENT_INT) {
+                il_generator_append_line(g, "conv.i8");
+            }
+
+            il_generator_append_line(
+                g, "call void [mscorlib]System.Console::Write(%s)", kind
+            );
+        }
+
+        if (stmt->u.WRITE_STMT.keyword.kind == C_TOKEN_WRITELN) {
+            il_generator_append_line(
+                g, "call void [mscorlib]System.Console::WriteLine()"
+            );
+        }
+    } break;
+    case AST_KIND_IF_STMT: {
+        isize end_label = 0;
+        b32 is_root = stmt->u.IF_STMT.is_root;
+        if (is_root) {
+            end_label = label_stack_push(g);
+        }
+
+        isize else_label = label_stack_push(g);
+        isize if_label = label_stack_push(g);
+
+        AstNode *expr = stmt->u.IF_STMT.cond;
+        if (expr != NULL) {
+            il_generator_append_expr(g, expr);
+            il_generator_append_line(g, "brtrue IL_%02td", if_label);
+            il_generator_append_line(g, "br IL_%02td", else_label);
+
+            il_generator_append_label(g);
+        } else {
+            label_stack_pop(g);
+        }
+
+        AstList *stmts = &stmt->u.IF_STMT.body->u.STMT_LIST.list;
+        for (isize i = 0; i < stmts->len; i++) {
+            il_generator_append_stmt(g, stmts->data[i]);
+        }
+
+        il_generator_append_line(g, "br IL_%02td", end_label);
+
+        if (expr != NULL) {
+            il_generator_append_label(g);
+            g->code = cy_string_append_fmt(g->code, "IL_%02td:\r\n", if_label);
+        }
+
+        AstNode *else_stmt = stmt->u.IF_STMT.else_stmt;
+        if (else_stmt != NULL) {
+            il_generator_append_stmt(g, else_stmt);
+        }
+
+        if (is_root) {
+            il_generator_append_label(g);
+        }
+    } break;
+    case AST_KIND_REPEAT_STMT: {
+    } break;
+    default: break;
+    }
+}
+
+static CyString il_generate(IlGenerator *g)
+{
+    AstList *stmts = &g->ast->root->u.MAIN.body->u.STMT_LIST.list;
+    isize init_cap = 10 * stmts->len;
+    g->code = cy_string_create_reserve(g->alloc, init_cap);
+    const char *header =
+        ".assembly extern mscorlib {}\r\n"
+        ".assembly _obj_code {}\r\n"
+        ".module _obj_code.exe\r\n"
+        ".class public Main {\r\n"
+        "\t.method public static void main() {\r\n"
+        "\t\t.entrypoint\r\n";
+    g->code = cy_string_append_c(g->code, header);
+
+    for (isize i = 0; i < stmts->len; i++) {
+        AstNode *stmt = stmts->data[i];
+        il_generator_append_stmt(g, stmt);
+    }
+
+    const char *footer =
+        "\t\tret\r\n"
+        "\t}\r\n"
+        "}\r\n";
+    g->code = cy_string_append_c(g->code, footer);
+
+    return g->code;
+}
 
 typedef struct {
     CyString msg;
     CyString code;
 } CompilerOutput;
 
-CompilerOutput compile(String src_code)
+void compiler_output_free(CompilerOutput *output)
+{
+    cy_string_free(output->msg);
+    cy_string_free(output->code);
+    cy_mem_zero(output, sizeof(*output));
+}
+
+CompilerOutput compile(CyAllocator a, String src_code)
 {
 #ifdef CY_DEBUG
     CyTicks start = cy_ticks_query();
 #endif
 
-    CyAllocator heap_allocator = cy_heap_allocator();
-    CyArena tokenizer_arena = cy_arena_init(heap_allocator, 0x4000);
+    CyArena tokenizer_arena = cy_arena_init(a, 0x4000);
     CyAllocator temp_allocator = cy_arena_allocator(&tokenizer_arena);
 
     CyStack parser_stack = {0};
 
     CyString code = NULL;
     isize init_cap = 0x100;
-    CyString msg = cy_string_create_reserve(heap_allocator, init_cap);
+    CyString msg = cy_string_create_reserve(a, init_cap);
     Tokenizer tokenizer = tokenizer_init(src_code);
     TokenList token_list = tokenize(temp_allocator, &tokenizer, true);
     if (tokenizer.err != T_ERR_NONE) {
@@ -2569,7 +3095,7 @@ CompilerOutput compile(String src_code)
     }
 
     isize stack_size = token_list.len * sizeof(ParserSymbol);
-    parser_stack = cy_stack_init(heap_allocator, stack_size);
+    parser_stack = cy_stack_init(a, stack_size);
     CyAllocator stack_allocator = cy_stack_allocator(&parser_stack);
     Parser parser = parser_init(stack_allocator, &token_list);
 
@@ -2586,10 +3112,8 @@ CompilerOutput compile(String src_code)
         goto cleanup;
     }
 
-#if 0
-    code = generate_il(temp_allocator, &ast);
-#endif
-
+    IlGenerator generator = il_generator_init(a, stack_allocator, &ast);
+    code = il_generate(&generator);
     msg = cy_string_append_c(msg, "programa compilado com sucesso");
 
 #ifdef CY_DEBUG
@@ -2602,10 +3126,8 @@ cleanup:
     cy_stack_deinit(&parser_stack);
     cy_arena_deinit(&tokenizer_arena);
 
-    cy_string_shrink(msg);
-
     return (CompilerOutput){
         .code = code,
-        .msg = msg,
+        .msg = cy_string_shrink(msg),
     };
 }

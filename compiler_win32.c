@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <shlwapi.h>
 #include <commctrl.h>
 #include <uxtheme.h>
 
@@ -906,7 +907,7 @@ static inline CyString cy_string_from_text_editor(CyAllocator a)
 
 #define PATH_BUF_CAP 0x1000
 
-static inline void file_path_from_handle(
+static inline void Win32PathFromHandle(
     HANDLE file, u16 *buf_out, isize buf_size
 ) {
     GetFinalPathNameByHandleW(file, buf_out, buf_size, 0);
@@ -1052,7 +1053,7 @@ LRESULT CALLBACK Win32WindowCallback(
 
             u16 path_final[PATH_BUF_CAP] = {0};
             isize path_final_cap = CY_STATIC_ARR_LEN(path_final);
-            file_path_from_handle(g_state.file, path_final, path_final_cap);
+            Win32PathFromHandle(g_state.file, path_final, path_final_cap);
 
             g_state.scratch_file = false;
 
@@ -1104,7 +1105,7 @@ LRESULT CALLBACK Win32WindowCallback(
             u16 path_buf[PAGE_SIZE] = {0};
             isize path_buf_cap = CY_STATIC_ARR_LEN(path_buf);
             if (!g_state.scratch_file) {
-                file_path_from_handle(g_state.file, path_buf, path_buf_cap);
+                Win32PathFromHandle(g_state.file, path_buf, path_buf_cap);
             } else {
                 u16 *file_filter =
                     L"Qualquer (*.*)\0*.*\0Arquivo de texto (*.txt)\0*.txt\0\0";
@@ -1164,7 +1165,7 @@ LRESULT CALLBACK Win32WindowCallback(
 
             u16 path_final[PATH_BUF_CAP] = {0};
             isize path_final_cap = CY_STATIC_ARR_LEN(path_final);
-            file_path_from_handle(g_state.file, path_final, path_final_cap);
+            Win32PathFromHandle(g_state.file, path_final, path_final_cap);
 
             g_state.scratch_file = false;
 
@@ -1202,24 +1203,63 @@ LRESULT CALLBACK Win32WindowCallback(
         case BUTTON_COMPILE: {
             CyString msg = NULL;
             u16 *msg_utf16 = NULL;
+            HANDLE code_file = NULL;
 
-            CyString src_code = cy_string_from_text_editor(cy_heap_allocator());
+            CyAllocator a = cy_heap_allocator();
+            CyString src_code = cy_string_from_text_editor(a);
             if (src_code == NULL) {
                 Win32ErrorDialog(L"Erro ao copiar texto do editor");
                 goto compile_cleanup;
             }
 
-            CompilerOutput output = compile(cy_string_view_create(src_code));
+            CompilerOutput output = compile(a, cy_string_view_create(src_code));
             msg = output.msg;
 
-            // TODO(cya): write il code file
+            if (output.code != NULL && g_state.file != NULL) {
+                u16 path[PATH_BUF_CAP] = {0};
+                isize path_cap = CY_STATIC_ARR_LEN(path);
+                Win32PathFromHandle(g_state.file, path, path_cap);
+
+                u16 *ext = PathFindExtensionW(path);
+                Win32AppendExtension(path, ext - path, path_cap, L"il");
+
+                code_file = CreateFileW(
+                    path,
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL,
+                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                    NULL
+                );
+                if (code_file == INVALID_HANDLE_VALUE) {
+                    Win32ErrorDialog(L"Erro ao salvar arquivo");
+                    goto compile_cleanup;
+                }
+
+                isize bytes_written = 0;
+                b32 written = WriteFile(
+                    code_file,
+                    output.code,
+                    cy_string_len(output.code),
+                    (LPDWORD)&bytes_written,
+                    NULL
+                );
+                if (!written) {
+                    Win32ErrorDialog(L"Erro ao escrever texto no arquivo");
+                    goto compile_cleanup;
+                }
+            }
 
             msg_utf16 = Win32UTF8toUTF16(msg);
             Win32SetLogAreaText(msg_utf16);
 
         compile_cleanup:
+            if (code_file != NULL) {
+                CloseHandle(code_file);
+            }
+
+            compiler_output_free(&output);
             cy_string_16_free(msg_utf16);
-            cy_string_free(msg);
             cy_string_free(src_code);
         } break;
         case BUTTON_DISPLAY_GROUP: {

@@ -9,7 +9,7 @@ where /q %CC% || (
 )
 
 set "FLAGS=-std=c99 -Wall -Wextra -pedantic"
-set "LFLAGS=-luser32 -lcomctl32 -lgdi32 -lcomdlg32 -luxtheme"
+set "LFLAGS=-luser32 -lcomctl32 -lgdi32 -lcomdlg32 -luxtheme -lshlwapi"
 set "FLAGS=%FLAGS% -municode -Wl,-subsystem,windows"
 if "%~1" == "debug" (
 	set "MFLAGS=-g -gcodeview -O0 -Wl,--pdb="
