@@ -10,7 +10,7 @@ de pequenos programas.
 - [X] Analisador léxico (*tokenizer*)
 - [X] Analisador sintático (*parser*)
 - [X] Analisador semântico (*checker*)
-- [ ] Gerador de código intermediário (*MSIL/CIL*)
+- [X] Gerador de código intermediário (*MSIL/CIL*)
 
 ## Especificação léxica (*tokens*)
 
