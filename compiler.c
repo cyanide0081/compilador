@@ -2938,11 +2938,13 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
         AstList *args = &stmt->u.READ_STMT.input_list->u.INPUT_LIST.list;
         for (isize i = 0; i < args->len; i++) {
             AstNode *arg = args->data[i];
-            String prompt = arg->u.INPUT_ARG.prompt->u.INPUT_PROMPT.string.str;
-            il_generator_append_line(g, "ldstr %.*s", STRING_ARG(prompt));
-            il_generator_append_line(
-                g, "call void [mscorlib]System.Console::Write(string)"
-            );
+            if (arg->u.INPUT_ARG.prompt != NULL) {
+                String prompt = arg->u.INPUT_ARG.prompt->u.INPUT_PROMPT.string.str;
+                il_generator_append_line(g, "ldstr %.*s", STRING_ARG(prompt));
+                il_generator_append_line(
+                    g, "call void [mscorlib]System.Console::Write(string)"
+                );
+            }
 
             String ident = arg->u.INPUT_ARG.ident->u.IDENT.tok.str;
             AstEntityKind kind = arg->u.INPUT_ARG.ident->u.IDENT.kind;
