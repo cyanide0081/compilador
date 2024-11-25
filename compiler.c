@@ -2667,27 +2667,27 @@ typedef struct {
     CyAllocator alloc;
     Ast *ast;
     CyString code;
-    LabelStack labels;
+    LabelStack end_labels;
+    isize cur_label;
 } IlGenerator;
 
-static inline isize *label_stack_peek(IlGenerator *g)
+static inline isize label_stack_peek(IlGenerator *g)
 {
-    CY_VALIDATE_PTR(g);
-    return (g->labels.len > 0) ? &g->labels.items[g->labels.len - 1] : NULL;
+    return (g->end_labels.len > 0) ? g->end_labels.items[g->end_labels.len - 1] : 0;
 }
 
 static inline b32 label_stack_is_empty(IlGenerator *g)
 {
-    return g->labels.len < 1;
+    return g->end_labels.len < 1;
 }
 
 static inline isize label_stack_push(IlGenerator *g)
 {
-    if (g->labels.len == g->labels.cap) {
-        isize old_size = g->labels.cap * sizeof(*g->labels.items);
+    if (g->end_labels.len == g->end_labels.cap) {
+        isize old_size = g->end_labels.cap * sizeof(*g->end_labels.items);
         isize new_size = old_size * 2;
         isize *items = cy_resize(
-            g->labels.alloc, g->labels.items,
+            g->end_labels.alloc, g->end_labels.items,
             old_size, new_size
         );
         if (items == NULL) {
@@ -2696,22 +2696,22 @@ static inline isize label_stack_push(IlGenerator *g)
             return -1;
         }
 
-        g->labels.items = items;
-        g->labels.cap *= 2;
+        g->end_labels.items = items;
+        g->end_labels.cap *= 2;
     }
 
-     isize item = label_stack_is_empty(g) ? 1 : *label_stack_peek(g) + 1;
-     g->labels.items[g->labels.len++] = item;
+     isize item = ++g->cur_label;
+     g->end_labels.items[g->end_labels.len++] = item;
      return item;
 }
 
 static inline isize label_stack_pop(IlGenerator *g)
 {
-    if (g->labels.len <= 0) {
+    if (g->end_labels.len <= 0) {
         return -1;
     }
 
-    isize *top = &g->labels.items[--g->labels.len];
+    isize *top = &g->end_labels.items[--g->end_labels.len];
     isize ret = *top;
 
     cy_mem_set(top, 0, sizeof(*top));
@@ -2726,7 +2726,7 @@ static inline IlGenerator il_generator_init(
     return (IlGenerator){
         .alloc = a,
         .ast = ast,
-        .labels = (LabelStack){
+        .end_labels = (LabelStack){
             .alloc = stack_allocator,
             .items = items,
             .cap = cap,
@@ -2894,9 +2894,8 @@ static inline const char *il_class_from_entity_kind(AstEntityKind kind)
     return keyword;
 }
 
-static inline void il_generator_append_label(IlGenerator *g)
+static inline void il_generator_append_label(IlGenerator *g, isize label)
 {
-    isize label = label_stack_pop(g);
     g->code = cy_string_append_fmt(g->code, "IL_%02td:\r\n", label);
 }
 
@@ -2986,26 +2985,23 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
         }
     } break;
     case AST_KIND_IF_STMT: {
-        isize end_label = 0;
         b32 is_root = stmt->u.IF_STMT.is_root;
-        if (is_root) {
-            end_label = label_stack_push(g);
-        }
-
-        isize else_label = label_stack_push(g);
-        isize if_label = label_stack_push(g);
-
+            
+        isize if_label = ++g->cur_label;
+        isize end_label = is_root ? label_stack_push(g) : label_stack_peek(g);
+            
+        AstNode *else_stmt = stmt->u.IF_STMT.else_stmt;
+        isize else_label = else_stmt == NULL ? end_label : ++g->cur_label;
+            
         AstNode *expr = stmt->u.IF_STMT.cond;
         if (expr != NULL) {
             il_generator_append_expr(g, expr);
             il_generator_append_line(g, "brtrue IL_%02td", if_label);
             il_generator_append_line(g, "br IL_%02td", else_label);
-
-            il_generator_append_label(g);
-        } else {
-            label_stack_pop(g);
+                
+            il_generator_append_label(g, if_label);
         }
-
+            
         AstList *stmts = &stmt->u.IF_STMT.body->u.STMT_LIST.list;
         for (isize i = 0; i < stmts->len; i++) {
             il_generator_append_stmt(g, stmts->data[i]);
@@ -3013,18 +3009,14 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
 
         il_generator_append_line(g, "br IL_%02td", end_label);
 
-        if (expr != NULL) {
-            il_generator_append_label(g);
-            g->code = cy_string_append_fmt(g->code, "IL_%02td:\r\n", if_label);
-        }
-
-        AstNode *else_stmt = stmt->u.IF_STMT.else_stmt;
         if (else_stmt != NULL) {
+            il_generator_append_label(g, else_label);
             il_generator_append_stmt(g, else_stmt);
         }
 
         if (is_root) {
-            il_generator_append_label(g);
+            il_generator_append_label(g, end_label);
+            label_stack_pop(g);
         }
     } break;
     case AST_KIND_REPEAT_STMT: {
