@@ -302,6 +302,13 @@ typedef enum {
     BUTTON_COUNT,
 } ToolbarButtons;
 
+typedef enum {
+    ACCEL_COMPILE_TO_EXE = BUTTON_COUNT,
+    _ACCEL_COUNT,
+} AccelActions;
+
+#define ACCEL_COUNT (_ACCEL_COUNT - BUTTON_COUNT)
+
 STATIC_ASSERT(BUTTON_COUNT == 8);
 
 #define MAX_LINE_DIGITS 3
@@ -734,7 +741,6 @@ static void Win32ResizeTextAreas(HWND parent, isize splitter_top)
     EndDeferWindowPos(window_pos);
     SendMessageW(parent, WM_SETREDRAW, TRUE, 0);
 
-    // TODO(cya): calc and account for line count
     isize log_line_count = Edit_GetLineCount(g_controls.log_area);
     isize resize_padding = g_state.char_height;
     isize top = MIN(splitter_top, g_state.splitter_top) -
@@ -1215,7 +1221,12 @@ LRESULT CALLBACK Win32WindowCallback(
             CompilerOutput output = compile(a, cy_string_view_create(src_code));
             msg = output.msg;
 
-            if (output.code != NULL && g_state.file != NULL) {
+            if (g_state.file != NULL) {
+                if (output.code == NULL) {
+                    Win32ErrorDialog(L"Erro ao gerar código intermediário");
+                    break;
+                }
+
                 u16 path[PATH_BUF_CAP] = {0};
                 isize path_cap = CY_STATIC_ARR_LEN(path);
                 Win32PathFromHandle(g_state.file, path, path_cap);
@@ -1264,6 +1275,9 @@ LRESULT CALLBACK Win32WindowCallback(
         } break;
         case BUTTON_DISPLAY_GROUP: {
             Win32SetLogAreaText(g_bufs.members);
+        } break;
+        case ACCEL_COMPILE_TO_EXE: {
+            // TODO(cya): implement
         } break;
         default : {
             switch (HIWORD(w_param)) {
@@ -1385,8 +1399,7 @@ int WINAPI wWinMain(
     g_bufs.members = members_utf16;
     cy_string_free(members);
 
-    // TODO(cya): add accelerator for 'compile to exe' button (CTRL+F7)
-    ACCEL accels[BUTTON_COUNT] = {
+    ACCEL accels[BUTTON_COUNT + ACCEL_COUNT] = {
         {FVIRTKEY | FCONTROL, 'N', BUTTON_FILE_NEW},
         {FVIRTKEY | FCONTROL, 'O', BUTTON_FILE_OPEN},
         {FVIRTKEY | FCONTROL, 'S', BUTTON_FILE_SAVE},
@@ -1395,6 +1408,7 @@ int WINAPI wWinMain(
         {FVIRTKEY | FCONTROL, 'X', BUTTON_TEXT_CUT},
         {FVIRTKEY, VK_F7, BUTTON_COMPILE},
         {FVIRTKEY, VK_F1, BUTTON_DISPLAY_GROUP},
+        {FVIRTKEY | FCONTROL, VK_F7, ACCEL_COMPILE_TO_EXE},
     };
     HACCEL accel_table = CreateAcceleratorTableW(accels, BUTTON_COUNT);
     g_state.resize_cursor = LoadCursorW(NULL, IDC_SIZENS);

@@ -125,7 +125,29 @@ possibilitar a implementação de um analisador LL(1):
 <fator> ::= identificador | constante_int | constante_float | constante_string |
     "(" <expr> ")" |  "+" <fator> | "-" <fator> ;  
 ```
+
+Quando a análise sintática é realizada, é gerada uma árvore sintática abstrata
+(AST) que é posteriormente utilizada como a base para os estágios de análise
+semântica e geração de código intermediário.
     
+## Especificação semântica
+
+A parte semântica da linguagem é relativamente pequena, com as únicas restrições
+impostas sendo as de declarar um identificador antes de usá-lo e não declarar o
+mesmo identificador mais de uma vez.
+
+Estes aspectos são garantidos através de uma simples análise recursiva nos nós
+da AST.
+
+## Geração de código intermediário (MSIL/CIL)
+
+Após as análises acima terem sido rodadas, se houverem validado o programa, o
+gerador de código intermediário é chamado e navega a lista de instruções da
+AST do programa e gera o código para cada uma em sequência.
+
+O compilador por fim salva o código gerado em um arquivo com o mesmo nome que o
+programa fonte, porém com a extensão *.il*.
+
 ## Como compilar o compilador
 
 1. Baixar [LLVM-MinGW](https://github.com/mstorsjo/llvm-mingw/releases/latest)

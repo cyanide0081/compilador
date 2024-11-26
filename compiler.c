@@ -204,7 +204,6 @@ static void tokenizer_advance_to_next_rune(Tokenizer *t)
     t->cur = t->next;
     Rune rune = *t->cur;
     if (rune == 0) {
-        // TODO(cya): test this
         t->cur_rune = CY_RUNE_INVALID;
         return;
     } else if (rune & 0x80) {
@@ -334,7 +333,6 @@ static inline b32 token_is_keyword(String tok, i32 *kind_out)
 
 static inline b32 is_whitespace(Rune r)
 {
-    // TODO(cya): maybe detect Unicode whitespace chars?
     return r == ' ' || r == '\t' ||
         r == '\r' || r == '\n' ||
         r == '\v' || r == '\f';
@@ -448,7 +446,6 @@ static inline void tokenizer_parse_string_literal(
                 bad_tok.str.len += 1;
             }
 
-            // TODO(cya): indicate col pos of bad tok when we switch to arenas
             tokenizer_error(
                 t, &bad_tok, T_ERR_INVALID_STRING,
                 "especificador de formato inválido (%*)"
@@ -1166,7 +1163,6 @@ typedef struct {
     AstNode *root;
 } Ast;
 
-// TODO(cya): maybe alloc only the size of the required kind?
 #define AST_NODE_ALLOC(alloc, k) ast_node_alloc(alloc, AST_KIND_PREFIX(k))
 
 static inline AstNode *ast_node_alloc(CyAllocator a, AstKind kind)
@@ -1535,7 +1531,7 @@ typedef struct {
 typedef struct {
     Token *read_tok;
     ParserStack stack;
-    Ast *ast;
+    Ast ast;
     AstNode *cur_node;
     ParserError err;
 } Parser;
@@ -1722,8 +1718,7 @@ static Parser parser_init(CyAllocator stack_allocator, const TokenList *l)
 
 static Ast parse(CyAllocator a, Parser *p)
 {
-    Ast ast = { .alloc = a };
-    p->ast = &ast;
+    p->ast = (Ast){.alloc = a};
     for (;;) {
         if (p->err.kind != P_ERR_NONE) {
             break;
@@ -1776,7 +1771,7 @@ static Ast parse(CyAllocator a, Parser *p)
             CY_ASSERT(p->cur_node == NULL);
 
             new_node = AST_NODE_ALLOC(a, MAIN);
-            ast.root = new_node;
+            p->ast.root = new_node;
         } break;
         case GR_1: { // <lista_instr> ::= <instrucao> ";" <lista_instr_rep>
             parser_stack_push_non_terminal(p, NT_INSTR_LIST_R, NULL);
@@ -2411,7 +2406,7 @@ static Ast parse(CyAllocator a, Parser *p)
         p->cur_node = new_node;
     }
 
-    return ast;
+    return p->ast;
 }
 
 /* ----------------------------- Checker ------------------------------------ */
@@ -2642,11 +2637,6 @@ static inline isize label_stack_peek(IlGenerator *g)
     return (g->end_labels.len > 0) ? g->end_labels.items[g->end_labels.len - 1] : 0;
 }
 
-static inline b32 label_stack_is_empty(IlGenerator *g)
-{
-    return g->end_labels.len < 1;
-}
-
 static inline isize label_stack_push(IlGenerator *g)
 {
     if (g->end_labels.len == g->end_labels.cap) {
@@ -2657,8 +2647,6 @@ static inline isize label_stack_push(IlGenerator *g)
             old_size, new_size
         );
         if (items == NULL) {
-            // TODO(cya): error out here? (FIXME)
-            // _error(g, P_ERR_OUT_OF_MEMORY);
             return -1;
         }
 
@@ -2918,7 +2906,6 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
     } break;
     case AST_KIND_ASSIGN_STMT: {
         AstNode *expr = stmt->u.ASSIGN_STMT.expr;
-        // TODO(cya): determine if we're even gonna need this in the first place
         AstEntityKind expr_kind = ast_expr_determine_kind(expr);
         il_generator_append_expr(g, expr);
         if (expr_kind == AST_ENT_INT) {
