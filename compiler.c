@@ -2634,7 +2634,8 @@ typedef struct {
 
 static inline isize label_stack_peek(IlGenerator *g)
 {
-    return (g->end_labels.len > 0) ? g->end_labels.items[g->end_labels.len - 1] : 0;
+    return (g->end_labels.len > 0) ?
+        g->end_labels.items[g->end_labels.len - 1] : 0;
 }
 
 static inline isize label_stack_push(IlGenerator *g)
@@ -2830,6 +2831,7 @@ static inline const char *il_keyword_from_entity_kind(AstEntityKind kind)
 
     return keyword;
 }
+
 static inline const char *il_class_from_entity_kind(AstEntityKind kind)
 {
     const char *keyword = NULL;
@@ -3058,6 +3060,7 @@ static CyString il_generate(IlGenerator *g)
     return g->code;
 }
 
+/* -------------------------- Compiler interface ---------------------------- */
 typedef struct {
     CyString msg;
     CyString code;
