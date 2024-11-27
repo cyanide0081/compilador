@@ -302,14 +302,15 @@ typedef enum {
     BUTTON_COUNT,
 } ToolbarButtons;
 
+STATIC_ASSERT(BUTTON_COUNT == 8);
+
 typedef enum {
     ACCEL_COMPILE_TO_EXE = BUTTON_COUNT,
     _ACCEL_COUNT,
 } AccelActions;
 
 #define ACCEL_COUNT (_ACCEL_COUNT - BUTTON_COUNT)
-
-STATIC_ASSERT(BUTTON_COUNT == 8);
+#define ACTION_COUNT (BUTTON_COUNT + ACCEL_COUNT)
 
 #define MAX_LINE_DIGITS 3
 #define PADDING_PX 4
@@ -866,17 +867,17 @@ static inline void Win32SetLogAreaText(const u16 *txt)
 }
 
 #define MAX_STATUSBAR_TEXT_LEN 80
+#define PATH_PREFIX_LEN UTF16_STATIC_LENGTH(L"\\\\?\\")
 
 static inline void Win32SetStatusbarText(u16 *str)
 {
     CY_ASSERT_NOT_NULL(str);
 
-    isize prefix_len = UTF16_STATIC_LENGTH(L"\\\\?\\");
     isize len = cy_wcs_len(str);
-    ASSERT(len > prefix_len);
+    ASSERT(len > PATH_PREFIX_LEN);
 
-    str += prefix_len;
-    len -= prefix_len;
+    str += PATH_PREFIX_LEN;
+    len -= PATH_PREFIX_LEN;
     utf16_trim_start(str, len, MAX_STATUSBAR_TEXT_LEN);
 
     SetWindowTextW(g_controls.statusbar, str);
@@ -1206,10 +1207,12 @@ LRESULT CALLBACK Win32WindowCallback(
         case BUTTON_TEXT_CUT:  {
             SendMessageW(g_controls.text_editor, WM_CUT, 0, 0);
         } break;
-        case BUTTON_COMPILE: {
+        case BUTTON_COMPILE:
+        case ACCEL_COMPILE_TO_EXE: {
             CyString msg = NULL;
             u16 *msg_utf16 = NULL;
             HANDLE code_file = NULL;
+            CyString16 cmd_line = NULL;
 
             CyAllocator a = cy_heap_allocator();
             CyString src_code = cy_string_from_text_editor(a);
@@ -1221,21 +1224,23 @@ LRESULT CALLBACK Win32WindowCallback(
             CompilerOutput output = compile(a, cy_string_view_create(src_code));
             msg = output.msg;
 
+            u16 file_path[PATH_BUF_CAP] = {0};
+            isize file_path_cap = CY_STATIC_ARR_LEN(file_path);
             if (g_state.file != NULL) {
                 if (output.code == NULL) {
                     Win32ErrorDialog(L"Erro ao gerar código intermediário");
                     break;
                 }
 
-                u16 path[PATH_BUF_CAP] = {0};
-                isize path_cap = CY_STATIC_ARR_LEN(path);
-                Win32PathFromHandle(g_state.file, path, path_cap);
+                Win32PathFromHandle(g_state.file, file_path, file_path_cap);
 
-                u16 *ext = PathFindExtensionW(path);
-                Win32AppendExtension(path, ext - path, path_cap, L"il");
+                u16 *ext = PathFindExtensionW(file_path);
+                Win32AppendExtension(
+                    file_path, ext - file_path, file_path_cap, L"il"
+                );
 
                 code_file = CreateFileW(
-                    path,
+                    file_path,
                     GENERIC_READ | GENERIC_WRITE,
                     FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL,
@@ -1261,10 +1266,56 @@ LRESULT CALLBACK Win32WindowCallback(
                 }
             }
 
+            if (code_file != NULL) {
+                CloseHandle(code_file);
+                code_file = NULL;
+            }
+
+            if (command == ACCEL_COMPILE_TO_EXE) {
+                u16 ilasm_path[PATH_BUF_CAP] = {0};
+                DWORD path_len = SearchPathW(
+                    NULL, L"ilasm.exe", NULL,
+                    CY_STATIC_ARR_LEN(ilasm_path), ilasm_path,
+                    NULL
+                );
+                if (path_len == 0) {
+                    Win32ErrorDialog(L"ILASM não encontrado");
+                    goto compile_cleanup;
+                }
+
+                isize cmd_cap = PATH_BUF_CAP;
+                cmd_line = cy_string_16_create_reserve(a, cmd_cap);
+                cmd_line = cy_string_16_append_fmt(
+                    cmd_line, L"\"%ls\" \"%ls\"",
+                    ilasm_path, file_path + PATH_PREFIX_LEN
+                );
+
+                STARTUPINFO startup_info = {0};
+                PROCESS_INFORMATION proc_info = {0};
+                b32 created = CreateProcessW(
+                    NULL, cmd_line,
+                    NULL, NULL, FALSE,
+                    CREATE_NO_WINDOW,
+                    NULL, NULL,
+                    &startup_info, &proc_info
+                );
+                if (!created) {
+                    Win32ErrorDialog(L"Erro ao invocar ILASM");
+                    goto compile_cleanup;
+                }
+
+                WaitForSingleObject(proc_info.hProcess, INFINITE);
+                CloseHandle(proc_info.hProcess);
+                CloseHandle(proc_info.hThread);
+
+                DeleteFile(file_path);
+            }
+
             msg_utf16 = Win32UTF8toUTF16(msg);
             Win32SetLogAreaText(msg_utf16);
 
         compile_cleanup:
+            cy_string_16_free(cmd_line);
             if (code_file != NULL) {
                 CloseHandle(code_file);
             }
@@ -1275,9 +1326,6 @@ LRESULT CALLBACK Win32WindowCallback(
         } break;
         case BUTTON_DISPLAY_GROUP: {
             Win32SetLogAreaText(g_bufs.members);
-        } break;
-        case ACCEL_COMPILE_TO_EXE: {
-            // TODO(cya): implement
         } break;
         default : {
             switch (HIWORD(w_param)) {
@@ -1399,7 +1447,7 @@ int WINAPI wWinMain(
     g_bufs.members = members_utf16;
     cy_string_free(members);
 
-    ACCEL accels[BUTTON_COUNT + ACCEL_COUNT] = {
+    ACCEL accels[ACTION_COUNT] = {
         {FVIRTKEY | FCONTROL, 'N', BUTTON_FILE_NEW},
         {FVIRTKEY | FCONTROL, 'O', BUTTON_FILE_OPEN},
         {FVIRTKEY | FCONTROL, 'S', BUTTON_FILE_SAVE},
@@ -1410,7 +1458,7 @@ int WINAPI wWinMain(
         {FVIRTKEY, VK_F1, BUTTON_DISPLAY_GROUP},
         {FVIRTKEY | FCONTROL, VK_F7, ACCEL_COMPILE_TO_EXE},
     };
-    HACCEL accel_table = CreateAcceleratorTableW(accels, BUTTON_COUNT);
+    HACCEL accel_table = CreateAcceleratorTableW(accels, ACTION_COUNT);
     g_state.resize_cursor = LoadCursorW(NULL, IDC_SIZENS);
 
     MSG message;
