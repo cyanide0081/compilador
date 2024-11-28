@@ -2955,6 +2955,7 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
         }
     } break;
     case AST_KIND_WRITE_STMT: {
+        b32 writeln = stmt->u.WRITE_STMT.keyword.kind == C_TOKEN_WRITELN;
         AstList *exprs = &stmt->u.WRITE_STMT.expr_list->u.EXPR_LIST.list;
         for (isize i = 0; i < exprs->len; i++) {
             AstNode *expr = exprs->data[i];
@@ -2966,14 +2967,10 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
                 il_generator_append_line(g, "conv.i8");
             }
 
+            const char *keyword = writeln && i == exprs->len - 1 ?
+                "WriteLine" : "Write";
             il_generator_append_line(
-                g, "call void [mscorlib]System.Console::Write(%s)", kind
-            );
-        }
-
-        if (stmt->u.WRITE_STMT.keyword.kind == C_TOKEN_WRITELN) {
-            il_generator_append_line(
-                g, "call void [mscorlib]System.Console::WriteLine()"
+                g, "call void [mscorlib]System.Console::%s(%s)", keyword, kind
             );
         }
     } break;

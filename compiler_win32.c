@@ -1226,12 +1226,7 @@ LRESULT CALLBACK Win32WindowCallback(
 
             u16 file_path[PATH_BUF_CAP] = {0};
             isize file_path_cap = CY_STATIC_ARR_LEN(file_path);
-            if (g_state.file != NULL) {
-                if (output.code == NULL) {
-                    Win32ErrorDialog(L"Erro ao gerar código intermediário");
-                    break;
-                }
-
+            if (g_state.file != NULL || output.code == NULL) {
                 Win32PathFromHandle(g_state.file, file_path, file_path_cap);
 
                 u16 *ext = PathFindExtensionW(file_path);
