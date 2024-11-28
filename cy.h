@@ -573,14 +573,20 @@ CY_DEF CyString16 cy_string_16_resize(CyString16 str, isize new_cap);
 CY_DEF void cy_string_16_free(CyString16 str);
 
 CY_DEF void cy_string_16_clear(CyString16 str);
-CY_DEF CyString16 cy_string_16_append_len(CyString16 str, const wchar_t *other, isize len);
+CY_DEF CyString16 cy_string_16_append_len(
+    CyString16 str, const wchar_t *other, isize len
+);
 CY_DEF CyString16 cy_string_16_append(CyString16 str, const CyString16 other);
 CY_DEF CyString16 cy_string_16_append_c(CyString16 str, const wchar_t *other);
 CY_DEF CyString16 cy_string_16_append_rune(CyString16 str, Rune r);
-CY_DEF CyString16 cy_string_16_append_fmt(CyString16 str, const wchar_t *fmt, ...);
+CY_DEF CyString16 cy_string_16_append_fmt(
+    CyString16 str, const wchar_t *fmt, ...
+);
 CY_DEF CyString16 cy_string_16_append_view(CyString16 str, CyString16View view);
 
-CY_DEF CyString16View cy_string_16_view_create_len(const wchar_t *str, isize len);
+CY_DEF CyString16View cy_string_16_view_create_len(
+    const wchar_t *str, isize len
+);
 CY_DEF CyString16View cy_string_16_view_create(CyString16 str);
 CY_DEF CyString16View cy_string_16_view_create_c(const wchar_t *str);
 // NOTE(cya): exclusive range
@@ -588,8 +594,12 @@ CY_DEF CyString16View cy_string_16_view_substring(
     CyString16View str, isize begin_idx, isize end_idx
 );
 CY_DEF b32 cy_string_16_view_are_equal(CyString16View a, CyString16View b);
-CY_DEF b32 cy_string_16_view_has_prefix(CyString16View str, const wchar_t *prefix);
-CY_DEF b32 cy_string_16_view_contains(CyString16View str, const wchar_t *char_set);
+CY_DEF b32 cy_string_16_view_has_prefix(
+    CyString16View str, const wchar_t *prefix
+);
+CY_DEF b32 cy_string_16_view_contains(
+    CyString16View str, const wchar_t *char_set
+);
 
 /* ============================ Unicode helpers ============================= */
 CY_DEF isize cy_utf8_codepoints(const char *str);
