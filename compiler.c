@@ -1441,7 +1441,7 @@ static inline void ast_node_read_token(AstNode *node, Token *tok)
         dest = &node->u.WRITE_STMT.keyword;
     } break;
     case AST_KIND_REPEAT_STMT: {
-        if (!IS_IN_RANGE_IN(tok->kind, C_TOKEN_REPEAT, C_TOKEN_UNTIL)) {
+        if (!IS_IN_RANGE_IN(tok->kind, C_TOKEN_UNTIL, C_TOKEN_WHILE)) {
             return;
         }
 
@@ -2727,11 +2727,9 @@ static inline void il_generator_append_expr(IlGenerator *g, AstNode *expr)
         case C_TOKEN_DIV: {
             instr = "div";
         } break;
-        case C_TOKEN_CMP_EQ: {
-            instr = "ceq";
-        } break;
+        case C_TOKEN_CMP_EQ:
         case C_TOKEN_CMP_NE: {
-            instr = "cne";
+            instr = "ceq";
         } break;
         case C_TOKEN_CMP_GT: {
             instr = "cgt";
@@ -2749,6 +2747,10 @@ static inline void il_generator_append_expr(IlGenerator *g, AstNode *expr)
         }
 
         il_generator_append_line(g, instr);
+        if (op.kind == C_TOKEN_CMP_NE) {
+            il_generator_append_line(g, "ldc.i4 1");
+            il_generator_append_line(g, "xor");
+        }
     } break;
     case AST_KIND_UNARY_EXPR: {
         il_generator_append_expr(g, expr->u.UNARY_EXPR.expr);
@@ -3022,7 +3024,7 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
         il_generator_append_expr(g, expr);
 
         const char *instr = stmt->u.REPEAT_STMT.keyword.kind == C_TOKEN_WHILE ?
-            "false" : "true";
+            "true" : "false";
         il_generator_append_line(g, "br%s IL_%02td", instr, label);
     } break;
     default: break;

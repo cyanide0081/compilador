@@ -922,6 +922,8 @@ static inline void Win32PathFromHandle(
 
 #define OFN_FLAGS OFN_ENABLEHOOK | OFN_HIDEREADONLY | \
     OFN_LONGNAMES | OFN_NONETWORKBUTTON
+#define ILASM_PATH \
+    L"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\ilasm.exe"
 
 LRESULT CALLBACK Win32WindowCallback(
     HWND window,
@@ -1269,7 +1271,7 @@ LRESULT CALLBACK Win32WindowCallback(
             if (command == ACCEL_COMPILE_TO_EXE) {
                 u16 ilasm_path[PATH_BUF_CAP] = {0};
                 DWORD path_len = SearchPathW(
-                    NULL, L"ilasm.exe", NULL,
+                    NULL, ILASM_PATH, NULL,
                     CY_STATIC_ARR_LEN(ilasm_path), ilasm_path,
                     NULL
                 );
