@@ -3022,7 +3022,7 @@ static inline void il_generator_append_stmt(IlGenerator *g, AstNode *stmt)
         il_generator_append_expr(g, expr);
 
         const char *instr = stmt->u.REPEAT_STMT.keyword.kind == C_TOKEN_WHILE ?
-            "true" : "false";
+            "false" : "true";
         il_generator_append_line(g, "br%s IL_%02td", instr, label);
     } break;
     default: break;
