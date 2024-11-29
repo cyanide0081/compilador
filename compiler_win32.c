@@ -835,7 +835,7 @@ LRESULT CALLBACK Win32TextEditorCallback(
         GlobalUnlock(new_text);
         SetClipboardData(CF_UNICODETEXT, new_text);
 
-    clip_cleanup:
+clip_cleanup:
         CloseClipboard();
     } break;
     }
@@ -1105,7 +1105,7 @@ LRESULT CALLBACK Win32WindowCallback(
             Win32SetStatusbarText(path_final);
             Win32UpdateLineNumbers();
 
-        fopen_cleanup:
+fopen_cleanup:
             cy_string_16_free(final_buf);
             cy_string_16_free(utf16_buf);
             cy_string_free(utf8_buf);
@@ -1197,7 +1197,7 @@ LRESULT CALLBACK Win32WindowCallback(
             Win32SetLogAreaText(NULL);
             Win32SetStatusbarText(path_final);
 
-        fsave_cleanup:
+fsave_cleanup:
             cy_string_free(src_code);
         } break;
         case BUTTON_TEXT_COPY:  {
@@ -1226,41 +1226,43 @@ LRESULT CALLBACK Win32WindowCallback(
             CompilerOutput output = compile(a, cy_string_view_create(src_code));
             msg = output.msg;
 
+            b32 compilable = g_state.file != NULL && output.code != NULL;
+            if (!compilable) {
+                goto compile_out;
+            }
             u16 file_path[PATH_BUF_CAP] = {0};
             isize file_path_cap = CY_STATIC_ARR_LEN(file_path);
-            if (g_state.file != NULL || output.code == NULL) {
-                Win32PathFromHandle(g_state.file, file_path, file_path_cap);
+            Win32PathFromHandle(g_state.file, file_path, file_path_cap);
 
-                u16 *ext = PathFindExtensionW(file_path);
-                Win32AppendExtension(
-                    file_path, ext - file_path, file_path_cap, L"il"
-                );
+            u16 *ext = PathFindExtensionW(file_path);
+            Win32AppendExtension(
+                file_path, ext - file_path, file_path_cap, L"il"
+            );
 
-                code_file = CreateFileW(
-                    file_path,
-                    GENERIC_READ | GENERIC_WRITE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    NULL,
-                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                    NULL
-                );
-                if (code_file == INVALID_HANDLE_VALUE) {
-                    Win32ErrorDialog(L"Erro ao salvar arquivo");
-                    goto compile_cleanup;
-                }
+            code_file = CreateFileW(
+                file_path,
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                NULL,
+                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                NULL
+            );
+            if (code_file == INVALID_HANDLE_VALUE) {
+                Win32ErrorDialog(L"Erro ao salvar arquivo");
+                goto compile_cleanup;
+            }
 
-                isize bytes_written = 0;
-                b32 written = WriteFile(
-                    code_file,
-                    output.code,
-                    cy_string_len(output.code),
-                    (LPDWORD)&bytes_written,
-                    NULL
-                );
-                if (!written) {
-                    Win32ErrorDialog(L"Erro ao escrever texto no arquivo");
-                    goto compile_cleanup;
-                }
+            isize bytes_written = 0;
+            b32 written = WriteFile(
+                code_file,
+                output.code,
+                cy_string_len(output.code),
+                (LPDWORD)&bytes_written,
+                NULL
+            );
+            if (!written) {
+                Win32ErrorDialog(L"Erro ao escrever texto no arquivo");
+                goto compile_cleanup;
             }
 
             if (code_file != NULL) {
@@ -1271,7 +1273,9 @@ LRESULT CALLBACK Win32WindowCallback(
             if (command == ACCEL_COMPILE_TO_EXE) {
                 u16 ilasm_path[PATH_BUF_CAP] = {0};
                 DWORD path_len = SearchPathW(
-                    NULL, ILASM_PATH, NULL,
+                    L"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319",
+                    L"ilasm.exe",
+                    NULL,
                     CY_STATIC_ARR_LEN(ilasm_path), ilasm_path,
                     NULL
                 );
@@ -1302,16 +1306,25 @@ LRESULT CALLBACK Win32WindowCallback(
                 }
 
                 WaitForSingleObject(proc_info.hProcess, INFINITE);
+                DWORD code;
+                GetExitCodeProcess(proc_info.hProcess, &code);
+                if (code != EXIT_SUCCESS) {
+                    Win32ErrorDialog(L"Erro ao compilar código intermediário");
+                    goto compile_cleanup;
+                }
+
                 CloseHandle(proc_info.hProcess);
                 CloseHandle(proc_info.hThread);
-
                 DeleteFile(file_path);
+
+                msg = cy_string_append_c(msg, " (executável)");
             }
 
+compile_out:
             msg_utf16 = Win32UTF8toUTF16(msg);
             Win32SetLogAreaText(msg_utf16);
 
-        compile_cleanup:
+compile_cleanup:
             cy_string_16_free(cmd_line);
             if (code_file != NULL) {
                 CloseHandle(code_file);
