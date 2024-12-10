@@ -2167,6 +2167,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_46: { // <expr_log> ::= "||" <elemento> <expr_log>
@@ -2178,6 +2179,7 @@ static Ast parse(CyAllocator a, Parser *p)
 
             CY_ASSERT(p->cur_node->kind == AST_KIND_BINARY_EXPR);
 
+            p->cur_node->u.BINARY_EXPR.op = *p->read_tok;
             ast_expr_insert_node(p->cur_node, new_node);
         } break;
         case GR_47: { // <expr_log> ::= î
