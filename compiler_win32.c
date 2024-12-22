@@ -177,7 +177,10 @@ static void utf16_reverse(u16 *str)
 {
     u16 *start = str, *end = str + cy_wcs_len(str) - 1;
     while (start < end) {
-        *start++ = *end--;
+        u16 tmp = *start;
+        *start = *end;
+        *end = tmp;
+        start += 1, end -= 1;
     }
 }
 
