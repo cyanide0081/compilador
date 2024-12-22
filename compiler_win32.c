@@ -173,26 +173,31 @@ static void Win32AppendExtension(
     CopyMemory(end, ext, CY__U16S_TO_BYTES(ext_len));
 }
 
-static void utf16_from_int(isize n, isize max_digits, u16 *buf, isize cap)
+static void utf16_reverse(u16 *str)
 {
-    isize dividend = 10;
-    isize digits = 1;
-    while (n % dividend != n) {
-        dividend *= 10;
-        digits += 1;
+    u16 *start = str, *end = str + cy_wcs_len(str) - 1;
+    while (start < end) {
+        *start++ = *end--;
+    }
+}
+
+static const u16 num_to_char_table[] = L"0123456789";
+
+static void utf16_from_int(isize n, isize max_digits, u16 *buf)
+{
+    u16 *c = buf;
+    usize v = (usize)n;
+    if (v == 0) {
+        *c++ = '0';
+    } else {
+        for (isize d = 0; v > 0 && d <= max_digits; d++) {
+            *c++ = num_to_char_table[v % 10];
+            v /= 10;
+        }
     }
 
-    while (digits > max_digits) {
-        dividend /= 10;
-        n %= dividend;
-        digits -= 1;
-    }
-
-    for (isize i = 0; i < digits && i < cap; i++) {
-        dividend /= 10;
-        buf[i] = L'0' + n / dividend;
-        n %= dividend;
-    }
+    *c = '\0';
+    utf16_reverse(buf);
 }
 
 static void utf16_insert_dots(u16 *str, b32 null_terminate)
@@ -671,7 +676,7 @@ static void Win32UpdateLineNumbers(void)
     u16 num_buf[MAX_LINE_DIGITS + 1] = {0};
     CyString16 buf = g_bufs.lines;
     for (isize i = first_visible_line; i <= last_visible_line; i++) {
-        utf16_from_int(i, MAX_LINE_DIGITS, num_buf, CY_STATIC_ARR_LEN(num_buf));
+        utf16_from_int(i, MAX_LINE_DIGITS, num_buf);
         buf = cy_string_16_append_fmt(buf, L"%ls\r\n", num_buf);
     }
 
